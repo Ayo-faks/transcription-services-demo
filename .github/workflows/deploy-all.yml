@@ -226,11 +226,7 @@ jobs:
         run: |
           FUNC_NAME="${{ steps.func-name.outputs.name }}"
 
-          cat > frontend/config.js <<EOF
-          window.APP_CONFIG = {
-            apiBaseUrl: 'https://${FUNC_NAME}.azurewebsites.net/api'
-          };
-          EOF
+          printf "window.APP_CONFIG = {\n  apiBaseUrl: 'https://%s.azurewebsites.net/api'\n};\n" "$FUNC_NAME" > frontend/config.js
 
           echo "✓ Frontend configured to use: https://${FUNC_NAME}.azurewebsites.net/api"
           cat frontend/config.js

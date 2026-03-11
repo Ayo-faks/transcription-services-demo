@@ -71,11 +71,7 @@ jobs:
           if [ -n "$FUNC_NAME" ]; then
             echo "✓ Found Function App: $FUNC_NAME"
 
-            cat > frontend/config.js <<EOF
-            window.APP_CONFIG = {
-              apiBaseUrl: 'https://${FUNC_NAME}.azurewebsites.net/api'
-            };
-            EOF
+            printf "window.APP_CONFIG = {\n  apiBaseUrl: 'https://%s.azurewebsites.net/api'\n};\n" "$FUNC_NAME" > frontend/config.js
 
             echo "✓ Frontend configured for: https://${FUNC_NAME}.azurewebsites.net/api"
           else
