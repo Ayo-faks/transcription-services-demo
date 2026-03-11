@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.37.4.10188",
-      "templateHash": "16910016236822957698"
+      "templateHash": "9125220976453360716"
     }
   },
   "parameters": {
@@ -118,21 +118,6 @@
           "keySource": "Microsoft.Storage"
         }
       }
-    },
-    {
-      "type": "Microsoft.Storage/storageAccounts/blobServices",
-      "apiVersion": "2023-01-01",
-      "name": "[format('{0}/{1}', toLower(format('{0}{1}web', take(parameters('baseName'), 10), take(variables('uniqueSuffix'), 8))), 'default')]",
-      "properties": {
-        "staticWebsite": {
-          "enabled": true,
-          "indexDocument": "index.html",
-          "errorDocument404Path": "index.html"
-        }
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.Storage/storageAccounts', toLower(format('{0}{1}web', take(parameters('baseName'), 10), take(variables('uniqueSuffix'), 8))))]"
-      ]
     },
     {
       "type": "Microsoft.DocumentDB/databaseAccounts",

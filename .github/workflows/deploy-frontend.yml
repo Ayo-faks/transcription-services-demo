@@ -82,6 +82,17 @@ jobs:
             echo "⚠️ Could not find Function App - using existing configuration"
           fi
 
+      - name: Enable static website
+        run: |
+          ACCOUNT_NAME="${{ steps.storage.outputs.name }}"
+
+          az storage blob service-properties update \
+            --account-name "$ACCOUNT_NAME" \
+            --auth-mode login \
+            --static-website \
+            --index-document index.html \
+            --404-document index.html
+
       - name: Upload frontend to static website
         run: |
           ACCOUNT_NAME="${{ steps.storage.outputs.name }}"

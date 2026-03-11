@@ -255,6 +255,17 @@ jobs:
           echo "name=$ACCOUNT_NAME" >> $GITHUB_OUTPUT
           echo "✓ Frontend storage account: $ACCOUNT_NAME"
 
+      - name: Enable static website
+        run: |
+          ACCOUNT_NAME="${{ steps.frontend-storage.outputs.name }}"
+
+          az storage blob service-properties update \
+            --account-name "$ACCOUNT_NAME" \
+            --auth-mode login \
+            --static-website \
+            --index-document index.html \
+            --404-document index.html
+
       - name: Deploy Frontend
         run: |
           ACCOUNT_NAME="${{ steps.frontend-storage.outputs.name }}"

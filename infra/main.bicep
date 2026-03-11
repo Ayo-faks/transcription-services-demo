@@ -91,18 +91,6 @@ resource frontendStorageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' =
   }
 }
 
-resource frontendBlobService 'Microsoft.Storage/storageAccounts/blobServices@2023-01-01' = {
-  parent: frontendStorageAccount
-  name: 'default'
-  properties: any({
-    staticWebsite: {
-      enabled: true
-      indexDocument: 'index.html'
-      errorDocument404Path: 'index.html'
-    }
-  })
-}
-
 // ============================================================================
 // Cosmos DB - For storing transcription jobs and results
 // ============================================================================
