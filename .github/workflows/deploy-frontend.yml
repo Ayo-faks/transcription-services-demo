@@ -1,5 +1,5 @@
-# GitHub Actions workflow for deploying Static Web App (Frontend)
-name: 3. Deploy Static Web App
+# GitHub Actions workflow for deploying the frontend to Azure Storage static website hosting
+name: 3. Deploy Frontend
 
 on:
   push:
@@ -19,10 +19,13 @@ on:
       resourceGroup:
         description: 'Azure Resource Group (for auto-config)'
         required: false
-        default: 'speech-demo-west'
+        default: 'healthtranscribe-uk-rg'
+      storageAccountName:
+        description: 'Frontend storage account name (optional)'
+        required: false
 
 env:
-  AZURE_RESOURCE_GROUP: ${{ github.event.inputs.resourceGroup || 'speech-demo-west' }}
+  AZURE_RESOURCE_GROUP: ${{ github.event.inputs.resourceGroup || 'healthtranscribe-uk-rg' }}
 
 jobs:
   build-and-deploy:
@@ -36,73 +39,82 @@ jobs:
         with:
           submodules: true
 
-      - name: Validate deployment token
-        run: |
-          if [ -z "${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}" ]; then
-            echo "❌ Error: AZURE_STATIC_WEB_APPS_API_TOKEN secret is not set!"
-            echo ""
-            echo "To get the deployment token:"
-            echo "1. Go to Azure Portal → Static Web Apps → Your App"
-            echo "2. Click 'Manage deployment token'"
-            echo "3. Copy the token and add it as a GitHub secret"
-            exit 1
-          fi
-          echo "✓ Deployment token found"
-
-      - name: Login to Azure (optional - for auto-config)
+      - name: Login to Azure
         uses: azure/login@v2
-        continue-on-error: true
-        id: azure-login
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Auto-configure API URL
-        if: steps.azure-login.outcome == 'success'
+      - name: Determine frontend storage account
+        id: storage
         run: |
-          # Get Function App name from Azure
+          if [ -n "${{ github.event.inputs.storageAccountName }}" ]; then
+            ACCOUNT_NAME="${{ github.event.inputs.storageAccountName }}"
+          else
+            ACCOUNT_NAME=$(az storage account list \
+              --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+              --query "[?tags.role=='frontend-static-site'].name | [0]" \
+              -o tsv)
+          fi
+
+          if [ -z "$ACCOUNT_NAME" ]; then
+            echo "❌ Error: frontend storage account was not found!"
+            exit 1
+          fi
+
+          echo "name=$ACCOUNT_NAME" >> $GITHUB_OUTPUT
+          echo "✓ Frontend storage account: $ACCOUNT_NAME"
+
+      - name: Auto-configure API URL
+        run: |
           FUNC_NAME=$(az functionapp list -g ${{ env.AZURE_RESOURCE_GROUP }} --query "[0].name" -o tsv 2>/dev/null || echo "")
-          
+
           if [ -n "$FUNC_NAME" ]; then
             echo "✓ Found Function App: $FUNC_NAME"
-            
-            # Update staticwebapp.config.json
-            sed -i "s|\"[^\"]*\.azurewebsites\.net\"|\"${FUNC_NAME}.azurewebsites.net\"|g" frontend/staticwebapp.config.json
-            
-            # Update app.js fallback URL
-            sed -i "s|return 'https://[^']*\.azurewebsites\.net/api'|return 'https://${FUNC_NAME}.azurewebsites.net/api'|g" frontend/app.js
-            
+
+            cat > frontend/config.js <<EOF
+            window.APP_CONFIG = {
+              apiBaseUrl: 'https://${FUNC_NAME}.azurewebsites.net/api'
+            };
+            EOF
+
             echo "✓ Frontend configured for: https://${FUNC_NAME}.azurewebsites.net/api"
           else
             echo "⚠️ Could not find Function App - using existing configuration"
           fi
 
-      - name: Build and Deploy to Azure Static Web Apps
-        id: builddeploy
-        uses: Azure/static-web-apps-deploy@v1
-        with:
-          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          action: "upload"
-          app_location: "/frontend"
-          output_location: ""
-          skip_api_build: true
+      - name: Upload frontend to static website
+        run: |
+          ACCOUNT_NAME="${{ steps.storage.outputs.name }}"
+
+          az storage blob delete-batch \
+            --account-name "$ACCOUNT_NAME" \
+            --auth-mode login \
+            --source '$web' \
+            --pattern '*' || true
+
+          az storage blob upload-batch \
+            --account-name "$ACCOUNT_NAME" \
+            --auth-mode login \
+            --destination '$web' \
+            --source frontend \
+            --overwrite
+
+      - name: Output website URL
+        run: |
+          URL=$(az storage account show \
+            --name "${{ steps.storage.outputs.name }}" \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --query 'primaryEndpoints.web' -o tsv)
+          echo "Frontend URL: $URL"
 
       - name: Output summary
         run: |
-          echo "## Static Web App Deployed! 🎉" >> $GITHUB_STEP_SUMMARY
+          URL=$(az storage account show \
+            --name "${{ steps.storage.outputs.name }}" \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --query 'primaryEndpoints.web' -o tsv)
+          echo "## Frontend Deployed! 🎉" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "The frontend has been deployed successfully." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Check your Static Web App URL in the Azure Portal." >> $GITHUB_STEP_SUMMARY
-
-  close-pull-request:
-    if: github.event_name == 'pull_request' && github.event.action == 'closed'
-    runs-on: ubuntu-latest
-    name: Close Pull Request
-    
-    steps:
-      - name: Close Pull Request
-        uses: Azure/static-web-apps-deploy@v1
-        with:
-          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
-          action: "close"
+          echo "**Frontend URL:** $URL" >> $GITHUB_STEP_SUMMARY

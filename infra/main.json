@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.39.26.7824",
-      "templateHash": "13944285995855255064"
+      "version": "0.37.4.10188",
+      "templateHash": "16910016236822957698"
     }
   },
   "parameters": {
@@ -42,6 +42,7 @@
     "storageBlobDataOwnerRoleId": "b7e6dc6d-f1e8-4753-8033-0f276bb0955b",
     "storageQueueDataContributorRoleId": "974c5e8b-45b9-4653-ba55-5f855dd0fb88",
     "cognitiveServicesUserRoleId": "a97b65f3-24c7-4388-baec-2e87135dc908",
+    "cognitiveServicesOpenAIUserRoleId": "5e0bd9bd-7b93-4f28-af87-19fc36ad61bd",
     "cosmosDbDataContributorRoleId": "00000000-0000-0000-0000-000000000002"
   },
   "resources": [
@@ -54,6 +55,11 @@
         "name": "Standard_LRS"
       },
       "kind": "StorageV2",
+      "tags": {
+        "workload": "healthtranscribe",
+        "role": "backend-storage",
+        "environment": "[parameters('environment')]"
+      },
       "properties": {
         "supportsHttpsTrafficOnly": true,
         "minimumTlsVersion": "TLS1_2",
@@ -81,6 +87,51 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.Storage/storageAccounts', toLower(format('{0}{1}st', take(parameters('baseName'), 10), take(variables('uniqueSuffix'), 8))))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-01-01",
+      "name": "[toLower(format('{0}{1}web', take(parameters('baseName'), 10), take(variables('uniqueSuffix'), 8)))]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "kind": "StorageV2",
+      "tags": {
+        "workload": "healthtranscribe",
+        "role": "frontend-static-site",
+        "environment": "[parameters('environment')]"
+      },
+      "properties": {
+        "supportsHttpsTrafficOnly": true,
+        "minimumTlsVersion": "TLS1_2",
+        "allowSharedKeyAccess": false,
+        "allowBlobPublicAccess": false,
+        "publicNetworkAccess": "Enabled",
+        "encryption": {
+          "services": {
+            "blob": {
+              "enabled": true
+            }
+          },
+          "keySource": "Microsoft.Storage"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices",
+      "apiVersion": "2023-01-01",
+      "name": "[format('{0}/{1}', toLower(format('{0}{1}web', take(parameters('baseName'), 10), take(variables('uniqueSuffix'), 8))), 'default')]",
+      "properties": {
+        "staticWebsite": {
+          "enabled": true,
+          "indexDocument": "index.html",
+          "errorDocument404Path": "index.html"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', toLower(format('{0}{1}web', take(parameters('baseName'), 10), take(variables('uniqueSuffix'), 8))))]"
       ]
     },
     {
@@ -173,6 +224,41 @@
       }
     },
     {
+      "type": "Microsoft.CognitiveServices/accounts",
+      "apiVersion": "2023-10-01-preview",
+      "name": "[format('{0}-openai-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6))]",
+      "location": "[parameters('location')]",
+      "kind": "OpenAI",
+      "sku": {
+        "name": "S0"
+      },
+      "properties": {
+        "customSubDomainName": "[format('{0}-openai-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6))]",
+        "publicNetworkAccess": "Enabled",
+        "disableLocalAuth": true
+      }
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/deployments",
+      "apiVersion": "2023-10-01-preview",
+      "name": "[format('{0}/{1}', format('{0}-openai-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6)), 'gpt-4o-mini')]",
+      "sku": {
+        "name": "GlobalStandard",
+        "capacity": 10
+      },
+      "properties": {
+        "model": {
+          "format": "OpenAI",
+          "name": "gpt-4o-mini",
+          "version": "2024-07-18"
+        },
+        "raiPolicyName": "Microsoft.DefaultV2"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-openai-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6)))]"
+      ]
+    },
+    {
       "type": "Microsoft.Web/serverfarms",
       "apiVersion": "2023-01-01",
       "name": "[format('{0}-plan-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6))]",
@@ -253,6 +339,14 @@
               "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', format('{0}-lang-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6))), '2023-10-01-preview').endpoint]"
             },
             {
+              "name": "AZURE_OPENAI_ENDPOINT",
+              "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', format('{0}-openai-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6))), '2023-10-01-preview').endpoint]"
+            },
+            {
+              "name": "AZURE_OPENAI_DEPLOYMENT",
+              "value": "gpt-4o-mini"
+            },
+            {
               "name": "COSMOS_ENDPOINT",
               "value": "[reference(resourceId('Microsoft.DocumentDB/databaseAccounts', format('{0}-cosmos-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6))), '2023-11-15').documentEndpoint]"
             },
@@ -289,7 +383,9 @@
         "[resourceId('Microsoft.DocumentDB/databaseAccounts', format('{0}-cosmos-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6)))]",
         "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', format('{0}-cosmos-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6)), 'transcription-db', 'transcriptions')]",
         "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', format('{0}-cosmos-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6)), 'transcription-db')]",
+        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', format('{0}-openai-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6)), 'gpt-4o-mini')]",
         "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-lang-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6)))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-openai-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6)))]",
         "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-speech-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6)))]",
         "[resourceId('Microsoft.Storage/storageAccounts', toLower(format('{0}{1}st', take(parameters('baseName'), 10), take(variables('uniqueSuffix'), 8))))]"
       ]
@@ -377,6 +473,21 @@
       ]
     },
     {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[format('Microsoft.CognitiveServices/accounts/{0}', format('{0}-openai-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6)))]",
+      "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', format('{0}-openai-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6))), resourceId('Microsoft.Web/sites', format('{0}-func-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6))), variables('cognitiveServicesOpenAIUserRoleId'))]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('cognitiveServicesOpenAIUserRoleId'))]",
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', format('{0}-func-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6))), '2023-01-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', format('{0}-func-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6)))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-openai-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6)))]"
+      ]
+    },
+    {
       "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments",
       "apiVersion": "2023-11-15",
       "name": "[format('{0}/{1}', format('{0}-cosmos-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6)), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', format('{0}-cosmos-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6))), resourceId('Microsoft.Web/sites', format('{0}-func-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6))), variables('cosmosDbDataContributorRoleId')))]",
@@ -389,22 +500,6 @@
         "[resourceId('Microsoft.DocumentDB/databaseAccounts', format('{0}-cosmos-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6)))]",
         "[resourceId('Microsoft.Web/sites', format('{0}-func-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6)))]"
       ]
-    },
-    {
-      "type": "Microsoft.Web/staticSites",
-      "apiVersion": "2023-01-01",
-      "name": "[format('{0}-web-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6))]",
-      "location": "centralus",
-      "sku": {
-        "name": "Free",
-        "tier": "Free"
-      },
-      "properties": {
-        "buildProperties": {
-          "appLocation": "/frontend",
-          "outputLocation": "/frontend"
-        }
-      }
     }
   ],
   "outputs": {
@@ -416,13 +511,13 @@
       "type": "string",
       "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', format('{0}-func-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6))), '2023-01-01').defaultHostName)]"
     },
-    "staticWebAppName": {
+    "frontendStorageAccountName": {
       "type": "string",
-      "value": "[format('{0}-web-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6))]"
+      "value": "[toLower(format('{0}{1}web', take(parameters('baseName'), 10), take(variables('uniqueSuffix'), 8)))]"
     },
-    "staticWebAppUrl": {
+    "frontendWebsiteUrl": {
       "type": "string",
-      "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/staticSites', format('{0}-web-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6))), '2023-01-01').defaultHostname)]"
+      "value": "[reference(resourceId('Microsoft.Storage/storageAccounts', toLower(format('{0}{1}web', take(parameters('baseName'), 10), take(variables('uniqueSuffix'), 8)))), '2023-01-01').primaryEndpoints.web]"
     },
     "speechServiceEndpoint": {
       "type": "string",
@@ -431,6 +526,14 @@
     "languageServiceEndpoint": {
       "type": "string",
       "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', format('{0}-lang-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6))), '2023-10-01-preview').endpoint]"
+    },
+    "openAIServiceEndpoint": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', format('{0}-openai-{1}', variables('resourceBaseName'), take(variables('uniqueSuffix'), 6))), '2023-10-01-preview').endpoint]"
+    },
+    "openAIDeploymentName": {
+      "type": "string",
+      "value": "gpt-4o-mini"
     },
     "cosmosAccountEndpoint": {
       "type": "string",

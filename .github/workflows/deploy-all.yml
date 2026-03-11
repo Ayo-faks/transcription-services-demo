@@ -17,11 +17,11 @@ on:
       resourceGroup:
         description: 'Azure Resource Group name'
         required: true
-        default: 'speech-demo-west'
+        default: 'healthtranscribe-uk-rg'
       location:
         description: 'Azure region'
         required: true
-        default: 'westus2'
+        default: 'uksouth'
       skipInfrastructure:
         description: 'Skip infrastructure deployment (use existing resources)'
         required: false
@@ -43,9 +43,9 @@ jobs:
     name: 1️⃣ Deploy Infrastructure
     outputs:
       functionAppName: ${{ steps.deploy.outputs.functionAppName }}
-      staticWebAppName: ${{ steps.deploy.outputs.staticWebAppName }}
+      frontendStorageAccountName: ${{ steps.deploy.outputs.frontendStorageAccountName }}
       functionAppUrl: ${{ steps.deploy.outputs.functionAppUrl }}
-      staticWebAppUrl: ${{ steps.deploy.outputs.staticWebAppUrl }}
+      frontendWebsiteUrl: ${{ steps.deploy.outputs.frontendWebsiteUrl }}
     
     steps:
       - name: Checkout repository
@@ -67,6 +67,7 @@ jobs:
         id: deploy
         uses: azure/arm-deploy@v2
         with:
+          scope: resourcegroup
           resourceGroupName: ${{ env.AZURE_RESOURCE_GROUP }}
           template: ./infra/main.bicep
           parameters: >
@@ -86,7 +87,7 @@ jobs:
           echo "| Resource | Name |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|------|" >> $GITHUB_STEP_SUMMARY
           echo "| Function App | \`${{ steps.deploy.outputs.functionAppName }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Static Web App | \`${{ steps.deploy.outputs.staticWebAppName }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Frontend Storage Account | \`${{ steps.deploy.outputs.frontendStorageAccountName }}\` |" >> $GITHUB_STEP_SUMMARY
 
   # ============================================================================
   # Step 2: Deploy Function App
@@ -136,6 +137,7 @@ jobs:
         run: |
           zip -r deploy.zip \
             function_app.py \
+            pdf_generator.py \
             host.json \
             requirements.txt \
             .python_packages \
@@ -187,7 +189,7 @@ jobs:
           echo "Health check: $HTTP_CODE"
 
   # ============================================================================
-  # Step 3: Deploy Static Web App (Frontend)
+  # Step 3: Deploy Frontend
   # ============================================================================
   frontend:
     runs-on: ubuntu-latest
@@ -223,48 +225,52 @@ jobs:
       - name: Update frontend configuration
         run: |
           FUNC_NAME="${{ steps.func-name.outputs.name }}"
-          
-          # Update staticwebapp.config.json with correct function app URL
-          sed -i "s|\"[^\"]*\.azurewebsites\.net\"|\"${FUNC_NAME}.azurewebsites.net\"|g" frontend/staticwebapp.config.json
-          
-          # Update app.js fallback URL
-          sed -i "s|return 'https://[^']*\.azurewebsites\.net/api'|return 'https://${FUNC_NAME}.azurewebsites.net/api'|g" frontend/app.js
-          
-          echo "✓ Frontend configured to use: https://${FUNC_NAME}.azurewebsites.net/api"
-          cat frontend/staticwebapp.config.json
 
-      - name: Get Static Web App deployment token
-        id: swa-token
+          cat > frontend/config.js <<EOF
+          window.APP_CONFIG = {
+            apiBaseUrl: 'https://${FUNC_NAME}.azurewebsites.net/api'
+          };
+          EOF
+
+          echo "✓ Frontend configured to use: https://${FUNC_NAME}.azurewebsites.net/api"
+          cat frontend/config.js
+
+      - name: Determine frontend storage account
+        id: frontend-storage
         run: |
           if [ "${{ github.event.inputs.skipInfrastructure }}" == "true" ]; then
-            SWA_NAME="${{ secrets.AZURE_STATIC_WEB_APP_NAME }}"
+            ACCOUNT_NAME=$(az storage account list \
+              --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+              --query "[?tags.role=='frontend-static-site'].name | [0]" \
+              -o tsv)
           else
-            SWA_NAME="${{ needs.infrastructure.outputs.staticWebAppName }}"
+            ACCOUNT_NAME="${{ needs.infrastructure.outputs.frontendStorageAccountName }}"
           fi
-          
-          if [ -z "$SWA_NAME" ]; then
-            # Fallback: try to find it
-            SWA_NAME=$(az staticwebapp list -g ${{ env.AZURE_RESOURCE_GROUP }} --query "[0].name" -o tsv)
+
+          if [ -z "$ACCOUNT_NAME" ]; then
+            echo "❌ Frontend storage account not found"
+            exit 1
           fi
-          
-          TOKEN=$(az staticwebapp secrets list \
-            --name "$SWA_NAME" \
-            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
-            --query "properties.apiKey" -o tsv)
-          
-          echo "::add-mask::$TOKEN"
-          echo "token=$TOKEN" >> $GITHUB_OUTPUT
-          echo "name=$SWA_NAME" >> $GITHUB_OUTPUT
+
+          echo "name=$ACCOUNT_NAME" >> $GITHUB_OUTPUT
+          echo "✓ Frontend storage account: $ACCOUNT_NAME"
 
       - name: Deploy Frontend
-        uses: Azure/static-web-apps-deploy@v1
-        with:
-          azure_static_web_apps_api_token: ${{ steps.swa-token.outputs.token }}
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          action: "upload"
-          app_location: "/frontend"
-          output_location: ""
-          skip_api_build: true
+        run: |
+          ACCOUNT_NAME="${{ steps.frontend-storage.outputs.name }}"
+
+          az storage blob delete-batch \
+            --account-name "$ACCOUNT_NAME" \
+            --auth-mode login \
+            --source '$web' \
+            --pattern '*' || true
+
+          az storage blob upload-batch \
+            --account-name "$ACCOUNT_NAME" \
+            --auth-mode login \
+            --destination '$web' \
+            --source frontend \
+            --overwrite
 
   # ============================================================================
   # Summary
@@ -289,9 +295,12 @@ jobs:
         continue-on-error: true
         run: |
           FUNC_NAME=$(az functionapp list -g ${{ env.AZURE_RESOURCE_GROUP }} --query "[0].defaultHostName" -o tsv 2>/dev/null || echo "")
-          SWA_URL=$(az staticwebapp list -g ${{ env.AZURE_RESOURCE_GROUP }} --query "[0].defaultHostname" -o tsv 2>/dev/null || echo "")
+          FRONTEND_URL=$(az storage account list \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --query "[?tags.role=='frontend-static-site'].primaryEndpoints.web | [0]" \
+            -o tsv 2>/dev/null || echo "")
           echo "func_url=https://$FUNC_NAME" >> $GITHUB_OUTPUT
-          echo "swa_url=https://$SWA_URL" >> $GITHUB_OUTPUT
+          echo "frontend_url=$FRONTEND_URL" >> $GITHUB_OUTPUT
 
       - name: Generate summary
         run: |
@@ -309,8 +318,8 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "Your Healthcare Transcription Service is now live." >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            if [ -n "${{ steps.urls.outputs.swa_url }}" ]; then
-              echo "**Frontend URL:** ${{ steps.urls.outputs.swa_url }}" >> $GITHUB_STEP_SUMMARY
+            if [ -n "${{ steps.urls.outputs.frontend_url || needs.infrastructure.outputs.frontendWebsiteUrl }}" ]; then
+              echo "**Frontend URL:** ${{ steps.urls.outputs.frontend_url || needs.infrastructure.outputs.frontendWebsiteUrl }}" >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
               echo "**API URL:** ${{ steps.urls.outputs.func_url }}" >> $GITHUB_STEP_SUMMARY
             fi

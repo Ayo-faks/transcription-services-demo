@@ -14,11 +14,12 @@ API_URL="https://${FUNCTION_APP_NAME}.azurewebsites.net/api"
 
 echo "Updating frontend to use API: $API_URL"
 
-# Update app.js
-sed -i "s|return 'https://[^']*\.azurewebsites\.net/api'|return '${API_URL}'|g" frontend/app.js
-
-# Update staticwebapp.config.json
-sed -i "s|\"[^\"]*\.azurewebsites\.net\"|\"${FUNCTION_APP_NAME}.azurewebsites.net\"|g" frontend/staticwebapp.config.json
+# Update config.js
+cat > frontend/config.js <<EOF
+window.APP_CONFIG = {
+    apiBaseUrl: '${API_URL}'
+};
+EOF
 
 echo "✓ Frontend updated!"
 echo ""

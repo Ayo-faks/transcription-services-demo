@@ -4,21 +4,20 @@
 
 // API Configuration
 // The API URL can be configured in multiple ways:
-// 1. Set FUNCTION_APP_URL in staticwebapp.config.json for production
+// 1. Set window.APP_CONFIG.apiBaseUrl in config.js for production
 // 2. Uses /api for local development (Azure Functions Core Tools)
-// 3. Falls back to window.API_BASE_URL if set globally
+// 3. Uses window.FUNCTION_APP_URL for backward compatibility if present globally
 const API_BASE_URL = (() => {
-    // Check for global override (can be set in staticwebapp.config.json)
-    if (window.FUNCTION_APP_URL) {
-        return window.FUNCTION_APP_URL;
+    const configuredUrl = window.APP_CONFIG?.apiBaseUrl || window.FUNCTION_APP_URL;
+    if (configuredUrl) {
+        return configuredUrl;
     }
     // Local development
     if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
         return '/api';
     }
-    // Production - use linked backend or configured URL
-    // Update this URL after deploying your Function App, or use staticwebapp.config.json
-    return 'https://healthtranscript-func-si35ec.azurewebsites.net/api';
+    // Production requires config.js to be generated during deployment.
+    return '/api';
 })();
 
 // State

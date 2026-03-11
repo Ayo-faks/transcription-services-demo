@@ -35,6 +35,11 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
     name: 'Standard_LRS'
   }
   kind: 'StorageV2'
+  tags: {
+    workload: 'healthtranscribe'
+    role: 'backend-storage'
+    environment: environment
+  }
   properties: {
     supportsHttpsTrafficOnly: true
     minimumTlsVersion: 'TLS1_2'
@@ -56,6 +61,46 @@ resource audioContainer 'Microsoft.Storage/storageAccounts/blobServices/containe
   properties: {
     publicAccess: 'None'
   }
+}
+
+// Dedicated frontend storage account for UK-only static website hosting
+resource frontendStorageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+  name: toLower('${take(baseName, 10)}${take(uniqueSuffix, 8)}web')
+  location: location
+  sku: {
+    name: 'Standard_LRS'
+  }
+  kind: 'StorageV2'
+  tags: {
+    workload: 'healthtranscribe'
+    role: 'frontend-static-site'
+    environment: environment
+  }
+  properties: {
+    supportsHttpsTrafficOnly: true
+    minimumTlsVersion: 'TLS1_2'
+    allowSharedKeyAccess: false
+    allowBlobPublicAccess: false
+    publicNetworkAccess: 'Enabled'
+    encryption: {
+      services: {
+        blob: { enabled: true }
+      }
+      keySource: 'Microsoft.Storage'
+    }
+  }
+}
+
+resource frontendBlobService 'Microsoft.Storage/storageAccounts/blobServices@2023-01-01' = {
+  parent: frontendStorageAccount
+  name: 'default'
+  properties: any({
+    staticWebsite: {
+      enabled: true
+      indexDocument: 'index.html'
+      errorDocument404Path: 'index.html'
+    }
+  })
 }
 
 // ============================================================================
@@ -142,7 +187,7 @@ resource languageService 'Microsoft.CognitiveServices/accounts@2023-10-01-previe
 // ============================================================================
 resource openAIService 'Microsoft.CognitiveServices/accounts@2023-10-01-preview' = {
   name: '${resourceBaseName}-openai-${take(uniqueSuffix, 6)}'
-  location: 'eastus2' // Azure OpenAI has limited region availability
+  location: location
   kind: 'OpenAI'
   sku: { name: 'S0' }
   properties: {
@@ -344,30 +389,12 @@ resource cosmosDbRole 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@
 }
 
 // ============================================================================
-// Static Web App - Frontend hosting
-// ============================================================================
-resource staticWebApp 'Microsoft.Web/staticSites@2023-01-01' = {
-  name: '${resourceBaseName}-web-${take(uniqueSuffix, 6)}'
-  location: 'centralus' // Static Web Apps have limited region availability
-  sku: {
-    name: 'Free'
-    tier: 'Free'
-  }
-  properties: {
-    buildProperties: {
-      appLocation: '/frontend'
-      outputLocation: '/frontend'
-    }
-  }
-}
-
-// ============================================================================
 // Outputs - Used by GitHub Actions for deployment
 // ============================================================================
 output functionAppName string = functionApp.name
 output functionAppUrl string = 'https://${functionApp.properties.defaultHostName}'
-output staticWebAppName string = staticWebApp.name
-output staticWebAppUrl string = 'https://${staticWebApp.properties.defaultHostname}'
+output frontendStorageAccountName string = frontendStorageAccount.name
+output frontendWebsiteUrl string = frontendStorageAccount.properties.primaryEndpoints.web
 output speechServiceEndpoint string = speechService.properties.endpoint
 output languageServiceEndpoint string = languageService.properties.endpoint
 output openAIServiceEndpoint string = openAIService.properties.endpoint

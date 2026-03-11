@@ -123,7 +123,7 @@ Professional, responsive interface with healthcare-focused design:
 
 ```mermaid
 graph TB
-    subgraph Frontend["Azure Static Web App"]
+    subgraph Frontend["Azure Storage Static Website"]
         UI["Modern UI<br/>• Dark/Light Mode<br/>• Real-time Updates<br/>• Responsive Design"]
     end
 
@@ -191,11 +191,13 @@ az login
 
 # Create service principal (replace {subscription-id} with your subscription ID)
 az ad sp create-for-rbac --name "github-transcription-sp" \
-  --role contributor \
+  --role owner \
   --scopes /subscriptions/{subscription-id} \
   --sdk-auth
 ```
 **Copy the entire JSON output** — you'll need it next.
+
+The infrastructure template creates RBAC role assignments. If you don't want to grant `Owner`, use a principal that has both `Contributor` and `User Access Administrator` at the deployment scope.
 
 **Step 3: Configure GitHub Secrets**
 
@@ -211,8 +213,8 @@ Add the following secret:
 2. Select **"0. Deploy All (Complete)"** workflow
 3. Click **"Run workflow"**
 4. Enter parameters:
-   - **Resource Group Name:** e.g., `healthtranscribe-prod`
-   - **Azure Region:** e.g., `westus2`, `eastus`, `northeurope`
+  - **Resource Group Name:** e.g., `healthtranscribe-uk-rg`
+  - **Azure Region:** `uksouth`
 5. Click **"Run workflow"** button
 
 **Step 5: Add Deployment Tokens**
@@ -220,20 +222,15 @@ Add the following secret:
 After infrastructure deployment completes (~5 minutes), add these secrets:
 
 1. Get Function App name from workflow output
-2. Get Static Web App token from Azure Portal:
-   - Navigate to Static Web App resource
-   - Click **"Manage deployment token"**
-   - Copy the token
 
 Add secrets:
 - **Name:** `AZURE_FUNCTIONAPP_NAME` | **Value:** `<function-app-name>`
-- **Name:** `AZURE_STATIC_WEB_APPS_API_TOKEN` | **Value:** `<swa-token>`
 
 **Step 6: Deploy Application**
 
 Run workflows in order:
 1. **"Deploy Function App"** — Backend API
-2. **"Deploy Frontend"** — Static Web App
+2. **"Deploy Frontend"** — Upload static assets to the UK South storage website
 
 **Done!** Your application is now live.
 
@@ -247,21 +244,25 @@ az login
 az account set --subscription <subscription-id>
 
 # 2. Create resource group
-az group create --name healthtranscribe-rg --location westus2
+az group create --name healthtranscribe-uk-rg --location uksouth
 
 # 3. Deploy infrastructure
 az deployment group create \
-  --resource-group healthtranscribe-rg \
+  --resource-group healthtranscribe-uk-rg \
   --template-file infra/main.bicep \
-  --parameters environment=prod location=westus2
+  --parameters environment=prod location=uksouth
 
 # 4. Deploy Function App
 cd <project-root>
 func azure functionapp publish <function-app-name> --python
 
-# 5. Deploy Static Web App
-# Get deployment token from Azure Portal first
-swa deploy ./frontend --deployment-token <token> --env production
+# 5. Deploy frontend to the static website
+az storage blob upload-batch \
+  --account-name <frontend-storage-account-name> \
+  --auth-mode login \
+  --destination '$web' \
+  --source ./frontend \
+  --overwrite
 ```
 
 ---
@@ -277,7 +278,7 @@ transcription-services-demo/
 │       ├── deploy-function.yml
 │       └── deploy-frontend.yml
 │
-├── frontend/                   # Static Web App
+├── frontend/                   # Static website frontend
 │   ├── assets/
 │   │   ├── logo.svg           # HealthTranscribe logo
 │   │   └── favicon.svg        # Browser favicon
@@ -366,7 +367,7 @@ GET /api/status/{job_id}
 | **Language Service** | S | Text Analytics for Health | ~$1/1000 records |
 | **Function App** | EP1 Premium | Serverless backend API | ~$200/month |
 | **App Service Plan** | EP1 | Function App hosting | Included |
-| **Static Web App** | Free | Frontend hosting | **Free** |
+| **Frontend Storage Website** | Standard_LRS | UK-only frontend hosting | Minimal storage cost |
 | **Application Insights** | Pay-as-you-go | Monitoring and diagnostics | ~$2.30/GB |
 
 **Total Estimated Cost:** ~$210-250/month (processing 100 hours of audio)
@@ -406,8 +407,8 @@ pip install -r requirements.txt
 # Install Azure Functions Core Tools
 npm install -g azure-functions-core-tools@4
 
-# Install Static Web Apps CLI
-npm install -g @azure/static-web-apps-cli
+# Optional: serve the frontend locally
+cd frontend && python -m http.server 8080
 ```
 
 ### Configure Local Settings
@@ -424,9 +425,13 @@ Edit `local.settings.json`:
   "Values": {
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
     "FUNCTIONS_WORKER_RUNTIME": "python",
-    "SPEECH_ENDPOINT": "https://<your-speech>.cognitiveservices.azure.com/",
-    "LANGUAGE_ENDPOINT": "https://<your-language>.cognitiveservices.azure.com/",
+    "AZURE_SPEECH_ENDPOINT": "https://<your-speech>.cognitiveservices.azure.com/",
+    "AZURE_SPEECH_REGION": "uksouth",
+    "AZURE_LANGUAGE_ENDPOINT": "https://<your-language>.cognitiveservices.azure.com/",
+    "AZURE_OPENAI_ENDPOINT": "https://<your-openai>.openai.azure.com/",
+    "AZURE_OPENAI_DEPLOYMENT": "gpt-4o-mini",
     "COSMOS_ENDPOINT": "https://<your-cosmos>.documents.azure.com:443/",
+    "STORAGE_ACCOUNT_NAME": "<your-storage-account-name>",
     "STORAGE_ACCOUNT_NAME": "<your-storage-account>"
   }
 }
@@ -507,13 +512,15 @@ traces
 ### Environment Variables
 
 **Function App:**
-- `SPEECH_ENDPOINT` — Azure Speech Services endpoint
-- `LANGUAGE_ENDPOINT` — Azure Language Services endpoint
+- `AZURE_SPEECH_ENDPOINT` — Azure Speech Services endpoint
+- `AZURE_LANGUAGE_ENDPOINT` — Azure Language Services endpoint
+- `AZURE_OPENAI_ENDPOINT` — Azure OpenAI endpoint
+- `AZURE_OPENAI_DEPLOYMENT` — Azure OpenAI deployment name
 - `COSMOS_ENDPOINT` — Cosmos DB endpoint
 - `STORAGE_ACCOUNT_NAME` — Blob storage account name
 
-**Static Web App:**
-- `API_URL` — Function App URL (auto-configured in Azure)
+**Frontend static website:**
+- `window.APP_CONFIG.apiBaseUrl` in `frontend/config.js` — Function App URL injected during deployment
 
 ### Feature Flags
 
@@ -546,7 +553,7 @@ const CONFIG = {
 
 ### Development Tools
 - [Azure Functions Core Tools](https://learn.microsoft.com/azure/azure-functions/functions-run-local)
-- [Static Web Apps CLI](https://azure.github.io/static-web-apps-cli/)
+- [Azure Storage static website hosting](https://learn.microsoft.com/azure/storage/blobs/storage-blob-static-website)
 - [Azure Bicep Documentation](https://learn.microsoft.com/azure/azure-resource-manager/bicep/)
 
 ---

@@ -20,11 +20,11 @@ on:
       resourceGroup:
         description: 'Resource Group name'
         required: false
-        default: 'speech-demo-west'
+        default: 'healthtranscribe-uk-rg'
 
 env:
   PYTHON_VERSION: '3.11'
-  RESOURCE_GROUP: ${{ github.event.inputs.resourceGroup || 'speech-demo-west' }}
+  RESOURCE_GROUP: ${{ github.event.inputs.resourceGroup || 'healthtranscribe-uk-rg' }}
 
 jobs:
   build-and-deploy:
