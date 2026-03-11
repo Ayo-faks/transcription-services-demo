@@ -266,6 +266,22 @@ jobs:
             --index-document index.html \
             --404-document index.html
 
+      - name: Grant frontend upload access
+        run: |
+          ACCOUNT_NAME="${{ steps.frontend-storage.outputs.name }}"
+          ACCOUNT_ID=$(az storage account show --name "$ACCOUNT_NAME" --resource-group ${{ env.AZURE_RESOURCE_GROUP }} --query id -o tsv)
+          APP_ID=$(az account show --query user.name -o tsv)
+          OBJECT_ID=$(az ad sp show --id "$APP_ID" --query id -o tsv)
+
+          az role assignment create \
+            --assignee-object-id "$OBJECT_ID" \
+            --assignee-principal-type ServicePrincipal \
+            --role "Storage Blob Data Contributor" \
+            --scope "$ACCOUNT_ID" \
+            --only-show-errors || true
+
+          sleep 30
+
       - name: Deploy Frontend
         run: |
           ACCOUNT_NAME="${{ steps.frontend-storage.outputs.name }}"
