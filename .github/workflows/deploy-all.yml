@@ -161,6 +161,19 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Configure package deployment mode
+        run: |
+          FUNC_NAME="${{ steps.func-name.outputs.name }}"
+
+          az functionapp config appsettings set \
+            --name "$FUNC_NAME" \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --settings \
+              SCM_DO_BUILD_DURING_DEPLOYMENT=false \
+              ENABLE_ORYX_BUILD=false \
+              WEBSITE_RUN_FROM_PACKAGE=1 \
+            --output none
+
       - name: Deploy Function App
         run: |
           FUNC_NAME="${{ steps.func-name.outputs.name }}"
