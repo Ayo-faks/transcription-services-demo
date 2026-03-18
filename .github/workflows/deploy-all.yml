@@ -150,6 +150,7 @@ jobs:
           mkdir -p .generated-functions
 
           python - <<'PY'
+          import json
           import pathlib
           import sys
 
@@ -161,7 +162,10 @@ jobs:
           for fn in function_app.app.get_functions():
               fn_dir = output_root / fn.get_function_name()
               fn_dir.mkdir(parents=True, exist_ok=True)
-              (fn_dir / 'function.json').write_text(fn.get_function_json(), encoding='utf-8')
+              metadata = json.loads(fn.get_function_json())
+              if metadata.get('scriptFile') == 'function_app.py':
+                metadata['scriptFile'] = '../function_app.py'
+              (fn_dir / 'function.json').write_text(json.dumps(metadata), encoding='utf-8')
           PY
 
       - name: Create deployment package
