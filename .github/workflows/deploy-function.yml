@@ -103,16 +103,42 @@ jobs:
         run: |
           FUNC_NAME="${{ steps.set-name.outputs.name }}"
           echo "🔍 Verifying deployment..."
-          
-          # Test health endpoint
+
           HEALTH_URL="https://$FUNC_NAME.azurewebsites.net/api/health"
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "000")
-          
-          if [ "$HTTP_CODE" -eq "200" ]; then
-            echo "✅ Health check passed!"
-          else
-            echo "⚠️ Health check returned: $HTTP_CODE (may still be starting)"
+          HEALTH_JSON=$(curl -fsS --retry 6 --retry-delay 10 --retry-all-errors "$HEALTH_URL")
+          echo "$HEALTH_JSON"
+
+          python - <<'PY' <<<"$HEALTH_JSON"
+          import json
+          import sys
+
+          payload = json.load(sys.stdin)
+          bad_dependencies = [
+              name for name, details in (payload.get("dependencies") or {}).items()
+              if details.get("status") != "healthy"
+          ]
+
+          if payload.get("status") != "healthy":
+              raise SystemExit(
+                  f"Health check failed with status={payload.get('status')} bad_dependencies={bad_dependencies}"
+              )
+
+          print(f"Health check passed with dependencies={sorted((payload.get('dependencies') or {}).keys())}")
+          PY
+
+          PROTECTED_STATUS=$(curl -sS -o /tmp/protected_response.txt -w "%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -d '{"source":"deployment-smoke","language":"en-US"}' \
+            "https://$FUNC_NAME.azurewebsites.net/api/encounters")
+
+          if [ "$PROTECTED_STATUS" -ne 401 ]; then
+            echo "❌ Expected anonymous POST /api/encounters to return 401, got $PROTECTED_STATUS"
+            cat /tmp/protected_response.txt
+            exit 1
           fi
+
+          echo "Protected-route smoke check passed with expected 401 response."
           
           # List functions
           echo ""

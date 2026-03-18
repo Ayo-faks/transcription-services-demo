@@ -6,23 +6,31 @@ on:
     branches:
       - main
     paths:
-      - 'frontend/**'
+      - 'frontend-react/**'
       - '.github/workflows/deploy-frontend.yml'
   pull_request:
     types: [opened, synchronize, reopened, closed]
     branches:
       - main
     paths:
-      - 'frontend/**'
+      - 'frontend-react/**'
   workflow_dispatch:
     inputs:
       resourceGroup:
         description: 'Azure Resource Group (for auto-config)'
         required: false
         default: 'healthtranscribe-uk-rg'
+      functionAppName:
+        description: 'Existing Function App name for runtime API config override'
+        required: false
+        default: ''
       storageAccountName:
         description: 'Frontend storage account name (optional)'
         required: false
+      voiceLiveGatewayBaseUrl:
+        description: 'Optional Voice Live gateway base URL override for frontend config.js'
+        required: false
+        default: ''
 
 env:
   AZURE_RESOURCE_GROUP: ${{ github.event.inputs.resourceGroup || 'healthtranscribe-uk-rg' }}
@@ -66,17 +74,45 @@ jobs:
 
       - name: Auto-configure API URL
         run: |
-          FUNC_NAME=$(az functionapp list -g ${{ env.AZURE_RESOURCE_GROUP }} --query "[0].name" -o tsv 2>/dev/null || echo "")
+          FUNC_NAME="${{ github.event.inputs.functionAppName }}"
+          VOICE_LIVE_GATEWAY_BASE_URL="${{ github.event.inputs.voiceLiveGatewayBaseUrl }}"
+
+          if [ -z "$FUNC_NAME" ]; then
+            FUNC_NAME=$(az functionapp list -g ${{ env.AZURE_RESOURCE_GROUP }} --query "[0].name" -o tsv 2>/dev/null || echo "")
+          fi
 
           if [ -n "$FUNC_NAME" ]; then
+            API_BASE_URL="https://${FUNC_NAME}.azurewebsites.net/api"
             echo "✓ Found Function App: $FUNC_NAME"
 
-            printf "window.APP_CONFIG = {\n  apiBaseUrl: 'https://%s.azurewebsites.net/api'\n};\n" "$FUNC_NAME" > frontend/config.js
+            perl -0pi -e "s|window\\.APP_CONFIG\\.apiBaseUrl = '.*?';|window.APP_CONFIG.apiBaseUrl = '$API_BASE_URL';|" frontend-react/public/config.js
 
-            echo "✓ Frontend configured for: https://${FUNC_NAME}.azurewebsites.net/api"
+            if [ -n "$VOICE_LIVE_GATEWAY_BASE_URL" ]; then
+              perl -0pi -e "s|gatewayBaseUrl: '.*?'|gatewayBaseUrl: '$VOICE_LIVE_GATEWAY_BASE_URL'|" frontend-react/public/config.js
+            fi
+
+            grep -q "window.APP_CONFIG.apiBaseUrl = '$API_BASE_URL';" frontend-react/public/config.js
+            grep -q "window.APP_CONFIG.voiceLive" frontend-react/public/config.js
+
+            echo "✓ Frontend configured for: $API_BASE_URL"
           else
             echo "⚠️ Could not find Function App - using existing configuration"
           fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend-react/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend-react
+        run: npm ci
+
+      - name: Build React frontend
+        working-directory: frontend-react
+        run: npm run build
 
       - name: Enable static website
         run: |
@@ -119,7 +155,7 @@ jobs:
             --account-name "$ACCOUNT_NAME" \
             --auth-mode login \
             --destination '$web' \
-            --source frontend \
+            --source frontend-react/dist \
             --overwrite
 
       - name: Output website URL
@@ -129,6 +165,23 @@ jobs:
             --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
             --query 'primaryEndpoints.web' -o tsv)
           echo "Frontend URL: $URL"
+
+      - name: Verify landing page
+        run: |
+          URL=$(az storage account show \
+            --name "${{ steps.storage.outputs.name }}" \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --query 'primaryEndpoints.web' -o tsv)
+
+          INDEX_HTML=$(curl -fsS --retry 6 --retry-delay 10 --retry-all-errors "$URL")
+          printf "%s" "$INDEX_HTML" | grep -q 'id="root"'
+
+          CONFIG_JS=$(curl -fsS --retry 6 --retry-delay 10 --retry-all-errors "${URL}config.js")
+          printf "%s" "$CONFIG_JS" | grep -q 'apiBaseUrl'
+          printf "%s" "$CONFIG_JS" | grep -q 'voiceLive'
+          printf "%s" "$CONFIG_JS" | grep -q 'gatewayBaseUrl'
+
+          echo "Frontend landing page and runtime config smoke checks passed."
 
       - name: Output summary
         run: |

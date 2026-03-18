@@ -7,7 +7,21 @@ param baseName string = 'healthtranscript'
 @description('Location')
 param location string = resourceGroup().location
 
+@description('Allowed browser origin for CORS.')
+param allowedOrigin string = ''
+
+@description('Days after modification before encounter audio moves to the Cool tier.')
+param audioBlobCoolTierDays int = 30
+
+@description('Days after modification before encounter audio moves to the Archive tier.')
+param audioBlobArchiveTierDays int = 180
+
+@description('Days after modification before encounter audio is deleted.')
+param audioBlobDeleteDays int = 2920
+
 var uniqueSuffix = uniqueString(resourceGroup().id)
+var derivedFrontendOrigin = 'https://${toLower('${take(baseName, 10)}${take(uniqueSuffix, 8)}web')}.z33.web.${environment().suffixes.storage}'
+var effectiveAllowedOrigin = empty(allowedOrigin) ? derivedFrontendOrigin : allowedOrigin
 
 // Storage Account with NO shared key access (uses managed identity)
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
@@ -27,6 +41,45 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
 resource audioContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-01-01' = {
   name: '${storageAccount.name}/default/audio-files'
   properties: { publicAccess: 'None' }
+}
+
+resource storageLifecyclePolicy 'Microsoft.Storage/storageAccounts/managementPolicies@2023-01-01' = {
+  parent: storageAccount
+  name: 'default'
+  properties: {
+    policy: {
+      rules: [
+        {
+          name: 'encounter-audio-tier-and-retain'
+          enabled: true
+          type: 'Lifecycle'
+          definition: {
+            actions: {
+              baseBlob: {
+                tierToCool: {
+                  daysAfterModificationGreaterThan: audioBlobCoolTierDays
+                }
+                tierToArchive: {
+                  daysAfterModificationGreaterThan: audioBlobArchiveTierDays
+                }
+                delete: {
+                  daysAfterModificationGreaterThan: audioBlobDeleteDays
+                }
+              }
+            }
+            filters: {
+              blobTypes: [
+                'blockBlob'
+              ]
+              prefixMatch: [
+                'encounters/'
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
 }
 
 // Blob container for deployment
@@ -67,7 +120,7 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
       linuxFxVersion: 'Python|3.11'
       alwaysOn: true
       cors: {
-        allowedOrigins: ['*']
+        allowedOrigins: [effectiveAllowedOrigin]
       }
       appSettings: [
         // Use managed identity for AzureWebJobsStorage

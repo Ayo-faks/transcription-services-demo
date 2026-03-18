@@ -18,10 +18,22 @@ on:
         description: 'Azure Resource Group name'
         required: true
         default: 'healthtranscribe-uk-rg'
+      functionAppName:
+        description: 'Existing Function App name when skipping infrastructure'
+        required: false
+        default: ''
       location:
         description: 'Azure region'
         required: true
         default: 'uksouth'
+      allowedOrigin:
+        description: 'Frontend origin for Function App CORS and Easy Auth redirects'
+        required: false
+        default: ''
+      voiceLiveGatewayBaseUrl:
+        description: 'Optional Voice Live gateway base URL override for frontend config.js'
+        required: false
+        default: ''
       skipInfrastructure:
         description: 'Skip infrastructure deployment (use existing resources)'
         required: false
@@ -73,6 +85,7 @@ jobs:
           parameters: >
             environment=${{ github.event.inputs.environment }}
             location=${{ env.AZURE_LOCATION }}
+            allowedOrigin=${{ github.event.inputs.allowedOrigin }}
           deploymentName: 'full-deploy-${{ github.run_number }}'
 
       - name: Wait for RBAC propagation
@@ -106,16 +119,14 @@ jobs:
         id: func-name
         run: |
           if [ "${{ github.event.inputs.skipInfrastructure }}" == "true" ]; then
-            # Use secret when skipping infrastructure
-            NAME="${{ secrets.AZURE_FUNCTIONAPP_NAME }}"
+            NAME="${{ github.event.inputs.functionAppName }}"
           else
-            # Use output from infrastructure deployment
             NAME="${{ needs.infrastructure.outputs.functionAppName }}"
           fi
           
           if [ -z "$NAME" ]; then
             echo "❌ Function App name not available!"
-            echo "Set AZURE_FUNCTIONAPP_NAME secret or run infrastructure deployment"
+            echo "Set the functionAppName workflow input or run infrastructure deployment"
             exit 1
           fi
           
@@ -183,10 +194,42 @@ jobs:
           sleep 30
           az functionapp restart --name $FUNC_NAME --resource-group ${{ env.AZURE_RESOURCE_GROUP }}
           sleep 30
-          
-          # Health check
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://$FUNC_NAME.azurewebsites.net/api/health" || echo "000")
-          echo "Health check: $HTTP_CODE"
+
+          HEALTH_URL="https://$FUNC_NAME.azurewebsites.net/api/health"
+          HEALTH_JSON=$(curl -fsS --retry 6 --retry-delay 10 --retry-all-errors "$HEALTH_URL")
+          echo "$HEALTH_JSON"
+
+          python - <<'PY' <<<"$HEALTH_JSON"
+          import json
+          import sys
+
+          payload = json.load(sys.stdin)
+          bad_dependencies = [
+            name for name, details in (payload.get("dependencies") or {}).items()
+            if details.get("status") != "healthy"
+          ]
+
+          if payload.get("status") != "healthy":
+            raise SystemExit(
+              f"Health check failed with status={payload.get('status')} bad_dependencies={bad_dependencies}"
+            )
+
+          print(f"Health check passed with dependencies={sorted((payload.get('dependencies') or {}).keys())}")
+          PY
+
+          PROTECTED_STATUS=$(curl -sS -o /tmp/protected_response.txt -w "%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -d '{"source":"deployment-smoke","language":"en-US"}' \
+            "https://$FUNC_NAME.azurewebsites.net/api/encounters")
+
+          if [ "$PROTECTED_STATUS" -ne 401 ]; then
+            echo "❌ Expected anonymous POST /api/encounters to return 401, got $PROTECTED_STATUS"
+            cat /tmp/protected_response.txt
+            exit 1
+          fi
+
+          echo "Protected-route smoke check passed with expected 401 response."
 
   # ============================================================================
   # Step 3: Deploy Frontend
@@ -207,29 +250,139 @@ jobs:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Determine Function App Name
-        id: func-name
+        id: frontend_func_name
         run: |
           if [ "${{ github.event.inputs.skipInfrastructure }}" == "true" ]; then
-            FUNC_NAME="${{ secrets.AZURE_FUNCTIONAPP_NAME }}"
+            FUNC_NAME="${{ github.event.inputs.functionAppName }}"
           else
             FUNC_NAME="${{ needs.infrastructure.outputs.functionAppName }}"
           fi
-          
+
           if [ -z "$FUNC_NAME" ]; then
             FUNC_NAME=$(az functionapp list -g ${{ env.AZURE_RESOURCE_GROUP }} --query "[0].name" -o tsv)
           fi
-          
+
           echo "name=$FUNC_NAME" >> $GITHUB_OUTPUT
           echo "✓ Function App: $FUNC_NAME"
 
+      - name: Validate staging auth and tenant bootstrap preflight
+        if: ${{ github.event.inputs.environment == 'staging' || github.event.inputs.environment == 'prod' }}
+        env:
+          EXPECTED_ALLOWED_ORIGIN: ${{ github.event.inputs.allowedOrigin }}
+        run: |
+          FUNC_NAME="${{ steps.frontend_func_name.outputs.name }}"
+
+          if [ -z "$EXPECTED_ALLOWED_ORIGIN" ]; then
+            echo "❌ allowedOrigin input is required for staging and prod deployments"
+            exit 1
+          fi
+
+          AUTH_JSON=$(az webapp auth show --name "$FUNC_NAME" --resource-group ${{ env.AZURE_RESOURCE_GROUP }} -o json)
+          CORS_JSON=$(az functionapp cors show --name "$FUNC_NAME" --resource-group ${{ env.AZURE_RESOURCE_GROUP }} -o json)
+          APP_SETTINGS_JSON=$(az functionapp config appsettings list --name "$FUNC_NAME" --resource-group ${{ env.AZURE_RESOURCE_GROUP }} -o json)
+
+          AUTH_JSON="$AUTH_JSON" CORS_JSON="$CORS_JSON" APP_SETTINGS_JSON="$APP_SETTINGS_JSON" EXPECTED_ALLOWED_ORIGIN="$EXPECTED_ALLOWED_ORIGIN" python - <<'PY'
+          import json
+          import os
+
+          auth = json.loads(os.environ["AUTH_JSON"])
+          cors = json.loads(os.environ["CORS_JSON"])
+          app_settings = {
+              item["name"]: item.get("value", "")
+              for item in json.loads(os.environ["APP_SETTINGS_JSON"])
+              if item.get("name")
+          }
+          expected_allowed_origin = os.environ["EXPECTED_ALLOWED_ORIGIN"]
+          errors = []
+
+          if not auth.get("platform", {}).get("enabled"):
+              errors.append("Easy Auth platform.enabled is false")
+
+          global_validation = auth.get("globalValidation", {})
+          if not global_validation.get("requireAuthentication"):
+              errors.append("Easy Auth requireAuthentication is false")
+          if global_validation.get("unauthenticatedClientAction") != "Return401":
+              errors.append(
+                  f"Easy Auth unauthenticatedClientAction expected Return401 got {global_validation.get('unauthenticatedClientAction')}"
+              )
+          if "/api/health" not in (global_validation.get("excludedPaths") or []):
+              errors.append("Easy Auth excludedPaths is missing /api/health")
+
+          providers = auth.get("identityProviders", {})
+          aad_enabled = bool(providers.get("azureActiveDirectory", {}).get("enabled"))
+          google_enabled = bool(providers.get("google", {}).get("enabled"))
+          if not (aad_enabled or google_enabled):
+              errors.append("No Easy Auth identity provider is enabled")
+
+          if aad_enabled and not app_settings.get("MICROSOFT_PROVIDER_AUTHENTICATION_SECRET"):
+              errors.append("MICROSOFT_PROVIDER_AUTHENTICATION_SECRET is empty while Azure AD auth is enabled")
+          if google_enabled and not app_settings.get("GOOGLE_PROVIDER_AUTHENTICATION_SECRET"):
+              errors.append("GOOGLE_PROVIDER_AUTHENTICATION_SECRET is empty while Google auth is enabled")
+
+          required_settings = [
+              "COSMOS_ENDPOINT",
+              "PLATFORM_USERS_CONTAINER_NAME",
+              "PLATFORM_TENANTS_CONTAINER_NAME",
+              "PLATFORM_VOICE_SESSIONS_CONTAINER_NAME",
+              "DEFAULT_TENANT_ID",
+          ]
+          for name in required_settings:
+              if not app_settings.get(name):
+                  errors.append(f"Missing required app setting {name}")
+
+          allowed_origins = cors.get("allowedOrigins") or []
+          if expected_allowed_origin not in allowed_origins:
+              errors.append(
+                  f"CORS allowedOrigins does not contain expected origin {expected_allowed_origin}; actual={allowed_origins}"
+              )
+
+          if errors:
+              raise SystemExit("\n".join(errors))
+
+          print(
+              f"Staging auth/bootstrap preflight passed: aad_enabled={aad_enabled} google_enabled={google_enabled} default_tenant_id={app_settings.get('DEFAULT_TENANT_ID')}"
+          )
+          PY
+
+      - name: Run backend staging preflight smoke
+        if: ${{ github.event.inputs.environment == 'staging' || github.event.inputs.environment == 'prod' }}
+        run: |
+          chmod +x ./scripts/staging-smoke.sh
+          ./scripts/staging-smoke.sh \
+            --api-base-url "https://${{ steps.frontend_func_name.outputs.name }}.azurewebsites.net/api"
+
       - name: Update frontend configuration
         run: |
-          FUNC_NAME="${{ steps.func-name.outputs.name }}"
+          FUNC_NAME="${{ steps.frontend_func_name.outputs.name }}"
+          API_BASE_URL="https://${FUNC_NAME}.azurewebsites.net/api"
+          VOICE_LIVE_GATEWAY_BASE_URL="${{ github.event.inputs.voiceLiveGatewayBaseUrl }}"
 
-          printf "window.APP_CONFIG = {\n  apiBaseUrl: 'https://%s.azurewebsites.net/api'\n};\n" "$FUNC_NAME" > frontend/config.js
+          perl -0pi -e "s|window\\.APP_CONFIG\\.apiBaseUrl = '.*?';|window.APP_CONFIG.apiBaseUrl = '$API_BASE_URL';|" frontend-react/public/config.js
 
-          echo "✓ Frontend configured to use: https://${FUNC_NAME}.azurewebsites.net/api"
-          cat frontend/config.js
+          if [ -n "$VOICE_LIVE_GATEWAY_BASE_URL" ]; then
+            perl -0pi -e "s|gatewayBaseUrl: '.*?'|gatewayBaseUrl: '$VOICE_LIVE_GATEWAY_BASE_URL'|" frontend-react/public/config.js
+          fi
+
+          grep -q "window.APP_CONFIG.apiBaseUrl = '$API_BASE_URL';" frontend-react/public/config.js
+          grep -q "window.APP_CONFIG.voiceLive" frontend-react/public/config.js
+
+          echo "✓ Frontend configured to use: $API_BASE_URL"
+          cat frontend-react/public/config.js
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend-react/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend-react
+        run: npm ci
+
+      - name: Build React frontend
+        working-directory: frontend-react
+        run: npm run build
 
       - name: Determine frontend storage account
         id: frontend-storage
@@ -292,8 +445,20 @@ jobs:
             --account-name "$ACCOUNT_NAME" \
             --auth-mode login \
             --destination '$web' \
-            --source frontend \
+            --source frontend-react/dist \
             --overwrite
+
+      - name: Run staging smoke script
+        run: |
+          FRONTEND_URL=$(az storage account show \
+            --name "${{ steps.frontend-storage.outputs.name }}" \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --query 'primaryEndpoints.web' -o tsv)
+
+          chmod +x ./scripts/staging-smoke.sh
+          ./scripts/staging-smoke.sh \
+            --api-base-url "https://${{ steps.frontend_func_name.outputs.name }}.azurewebsites.net/api" \
+            --frontend-url "$FRONTEND_URL"
 
   # ============================================================================
   # Summary

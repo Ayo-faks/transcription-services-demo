@@ -2,7 +2,7 @@
 
 <div align="center">
   
-![HealthTranscribe](frontend/assets/logo.svg)
+![HealthTranscribe](frontend-react/public/logo.png)
 
 **Enterprise-grade healthcare transcription and clinical entity extraction platform powered by Azure AI**
 
@@ -17,6 +17,32 @@
 ## Overview
 
 HealthTranscribe is a production-ready, enterprise-grade application that transforms medical audio recordings into structured clinical data. Built with Azure AI Services, it delivers accurate transcription, intelligent medical entity extraction, relationship mapping, and standards-compliant FHIR R4 export — all through an intuitive, modern interface.
+
+## Local Functions Runtime
+
+Start the local Function app with `npm run start:functions` so Azure Functions Core Tools uses the project-local Python interpreter at `.venv/bin/python`. Starting `func` directly from a shell that is not activated against `.venv` can cause dependency mismatches during request handling.
+
+## Authentication And Tenants
+
+The React frontend now expects Easy Auth-backed sign-in for protected API routes and uses `/.auth/me` plus `/api/auth/session` to bootstrap identity, memberships, and the active tenant.
+
+- In production, sign-in uses Easy Auth login endpoints such as `/.auth/login/aad` and `/.auth/login/google`.
+- In local development, opt in explicitly to `LOCAL_DEV_AUTH=true` when you need local auth simulation, and make sure the Functions host uses the exact frontend origin with credentialed CORS: `CORS=http://127.0.0.1:4173` and `CORSCredentials=true`.
+- If a user has one membership, the app auto-selects that tenant.
+- If a user has multiple memberships, the app requires an active tenant selection before protected routes load.
+- If a user has no memberships, the shell shows a first-tenant bootstrap flow backed by `POST /api/admin/tenants`.
+
+All authenticated frontend HTTP requests stay cookie-based and the shared client automatically adds `X-Clinical-Tenant-Id` when an active tenant is selected.
+
+## Voice Live Session Startup
+
+Ambient Voice Live startup now performs an authenticated `POST /api/voice-sessions` exchange before opening the websocket. The backend stores a short-lived session document in the `platform_voice_sessions` container and returns a session token plus expiry timestamp for websocket startup.
+
+## Operations And Data Governance
+
+- Operational rollback and post-deploy checks are documented in `RUNBOOK.md`.
+- Encounter, job, audio-retention, deletion, and UK-hosting posture are documented in `DATA-POLICY.md`.
+- The primary production deploy smoke checks now validate both the dependency-aware `/api/health` JSON contract and an anonymous `POST /api/encounters` rejection to confirm auth protection remains active.
 
 ![Application Interface](docs/hero-section.png)
 
@@ -256,12 +282,21 @@ az deployment group create \
 cd <project-root>
 func azure functionapp publish <function-app-name> --python
 
-# 5. Deploy frontend to the static website
+# 5. Configure frontend runtime endpoints without dropping Voice Live settings
+VOICELIVE_GATEWAY_BASE_URL=https://<voice-live-gateway-host> \
+  ./configure-frontend.sh https://<function-app-name>.azurewebsites.net/api
+
+# 6. Deploy frontend to the static website
+cd frontend-react
+npm ci
+npm run build
+cd ..
+
 az storage blob upload-batch \
   --account-name <frontend-storage-account-name> \
   --auth-mode login \
   --destination '$web' \
-  --source ./frontend \
+  --source ./frontend-react/dist \
   --overwrite
 ```
 
@@ -278,13 +313,13 @@ transcription-services-demo/
 │       ├── deploy-function.yml
 │       └── deploy-frontend.yml
 │
-├── frontend/                   # Static website frontend
-│   ├── assets/
-│   │   ├── logo.svg           # HealthTranscribe logo
-│   │   └── favicon.svg        # Browser favicon
-│   ├── index.html             # Main application page
-│   ├── styles.css             # Enterprise UI styles (2400+ lines)
-│   └── app.js                 # Application logic
+├── frontend-react/             # Primary React frontend (Vite)
+│   ├── public/
+│   │   ├── config.js          # Runtime API and Voice Live config
+│   │   └── logo.png           # HealthTranscribe logo
+│   ├── src/                   # React application source
+│   ├── package.json           # Frontend scripts and dependencies
+│   └── dist/                  # Production build output
 │
 ├── infra/                      # Infrastructure as Code
 │   └── main.bicep             # Azure Bicep template (all resources)
@@ -407,8 +442,9 @@ pip install -r requirements.txt
 # Install Azure Functions Core Tools
 npm install -g azure-functions-core-tools@4
 
-# Optional: serve the frontend locally
-cd frontend && python -m http.server 8080
+# Install root helper dependencies and frontend packages
+npm install
+cd frontend-react && npm install
 ```
 
 ### Configure Local Settings
@@ -437,19 +473,64 @@ Edit `local.settings.json`:
 }
 ```
 
+For local auth simulation, explicitly set `LOCAL_DEV_AUTH=true` in `local.settings.json` only for development sessions. Do not keep that flag enabled in shared or production-facing settings.
+
+Because the React frontend calls `/api/auth/session` with `credentials: 'include'`, local Azure Functions cannot use wildcard CORS. For the local auth gate to enter the app successfully, set the Functions host values exactly as follows:
+
+```json
+"Host": {
+  "LocalHttpPort": 7072,
+  "CORS": "http://127.0.0.1:4173",
+  "CORSCredentials": true
+}
+```
+
+If `CORS` is `"*"` or `CORSCredentials` is `false`, the browser will block both `/.auth/me` and `/api/auth/session`, and clicking `Recheck session` will leave the user on the auth gate.
+
 ### Run Locally
 
 ```bash
-# Start Azure Functions backend
-func start
+# Start storage emulator
+npm run start:storage
 
-# In another terminal, start frontend (optional)
-cd frontend
-npx http-server -p 8080
+# In another terminal, start Azure Functions backend
+npm run start:functions
+
+# Point the frontend at the local API
+npm run configure:frontend:local
+
+# In another terminal, start frontend
+cd frontend-react
+npm run dev -- --host 127.0.0.1
 ```
 
-Backend runs on `http://localhost:7071`  
-Frontend runs on `http://localhost:8080`
+Backend runs on `http://localhost:7072`  
+Frontend runs on `http://127.0.0.1:5173`
+
+If you change `local.settings.json`, restart the Functions host before testing the auth gate again.
+
+### Fast Local Test Loop Before Staging
+
+Use this flow to avoid wasting staging build time:
+
+1. Start Azurite locally so Azure Functions has `AzureWebJobsStorage`.
+2. Start the Function app from the repo-local `.venv` and Core Tools install.
+3. Point `frontend-react/public/config.js` at the local API with `npm run configure:frontend:local`.
+4. Run the React frontend from `frontend-react/` and verify upload, ambient drawer state transitions, and health/API calls.
+5. Only switch back to the deployed API when you want an integration check against Azure.
+
+To point the frontend at the deployed Azure Function App instead of local Functions, use either of these:
+
+```bash
+./configure-frontend.sh <function-app-name>
+./configure-frontend.sh https://<function-app-name>.azurewebsites.net/api
+```
+
+This lets you run three useful pre-staging modes:
+
+1. Local frontend + local Functions for the fastest development loop.
+2. Local frontend + deployed Azure API to test UI changes against real cloud services.
+3. Deployed frontend + deployed API for final staging/production verification.
 
 ---
 
@@ -457,18 +538,48 @@ Frontend runs on `http://localhost:8080`
 
 ### Test Health Endpoint
 ```bash
-curl http://localhost:7071/api/health
+curl http://localhost:7072/api/health
+```
+
+The health endpoint returns structured JSON with `status`, `configuration`, and dependency-specific status entries. Production deploys should fail if the overall status is `degraded`.
+
+### Staging Smoke Script
+
+Run the combined staging smoke checks against a deployed API and frontend in one command:
+
+```bash
+./scripts/staging-smoke.sh \
+  --api-base-url https://<function-app-name>.azurewebsites.net/api \
+  --frontend-url https://<static-website-url>/
+```
+
+By default this verifies anonymous staging behavior:
+- `GET /api/health` returns healthy JSON
+- `GET /api/auth/session` returns `401`
+- `POST /api/voice-sessions` returns `401`
+- frontend landing page loads
+- `config.js` contains the runtime API URL and Voice Live settings
+
+For authenticated tenant-scoped checks, provide a session header and tenant id:
+
+```bash
+./scripts/staging-smoke.sh \
+  --api-base-url https://<function-app-name>.azurewebsites.net/api \
+  --frontend-url https://<static-website-url>/ \
+  --auth-header 'Cookie: AppServiceAuthSession=<value>' \
+  --tenant-id <tenant-id> \
+  --expected-default-tenant-id <default-tenant-id>
 ```
 
 ### Test Upload
 ```bash
-curl -X POST http://localhost:7071/api/upload \
+curl -X POST http://localhost:7072/api/upload \
   -F "file=@sample-audio.wav"
 ```
 
 ### Test Status
 ```bash
-curl http://localhost:7071/api/status/<job-id>
+curl http://localhost:7072/api/status/<job-id>
 ```
 
 ---
@@ -520,19 +631,53 @@ traces
 - `STORAGE_ACCOUNT_NAME` — Blob storage account name
 
 **Frontend static website:**
-- `window.APP_CONFIG.apiBaseUrl` in `frontend/config.js` — Function App URL injected during deployment
+- `window.APP_CONFIG.apiBaseUrl` in `frontend-react/public/config.js` — Function App URL injected during deployment
+- `window.APP_CONFIG.voiceLive.gatewayBaseUrl` in `frontend-react/public/config.js` — Base URL of the Voice Live websocket gateway used by the ambient assistant drawer
+- `window.APP_CONFIG.voiceLive.wsPath` in `frontend-react/public/config.js` — Websocket path on the Voice Live gateway, default `/ws`
+- `window.APP_CONFIG.voiceLive.instructions` in `frontend-react/public/config.js` — Ambient scribe instructions sent when the live voice session starts
 
-### Feature Flags
+### Ambient Assistant Realtime Config
 
-Customize behavior in `frontend/app.js`:
+To enable live ambient transcript streaming in the Assistant drawer, configure the Voice Live gateway in `frontend-react/public/config.js`:
+
 ```javascript
-const CONFIG = {
-  MAX_FILE_SIZE: 100 * 1024 * 1024, // 100 MB
-  POLL_INTERVAL: 2000,               // 2 seconds
-  SUPPORTED_FORMATS: ['wav', 'mp3', 'flac', 'ogg', 'm4a'],
-  THEME_PREFERENCE: 'auto'           // 'light', 'dark', or 'auto'
+window.APP_CONFIG.voiceLive = {
+  gatewayBaseUrl: 'https://your-voice-live-gateway.example.com',
+  wsPath: '/ws',
+  mode: 'model',
+  model: 'gpt-realtime',
+  voiceType: 'azure-standard',
+  voice: 'en-US-Ava:DragonHDLatestNeural',
+  transcribeModel: 'gpt-4o-transcribe',
+  inputLanguage: 'en',
+  instructions: 'You are an ambient clinical scribe. Do not greet, answer, or speak unless explicitly instructed. Focus on transcribing the live clinician and patient conversation accurately.'
 };
 ```
+
+If the Voice Live gateway is not configured, the drawer still supports the draft review and transcript-first clinical processing flow, but transcript text must be entered or pasted manually.
+
+### Ambient Audio-to-Draft Flow
+
+The ambient assistant now captures browser audio locally during live sessions. When the clinician clicks **Stop Recording** the captured audio is submitted to the backend for server-side transcription using the same Azure Speech Fast Transcription API (with diarization) that the file-upload pipeline uses. This produces a higher-quality draft with speaker labels, replacing the provisional websocket transcript.
+
+**How it works:**
+
+1. **Start Recording** — microphone PCM is buffered locally in the browser *and* streamed to the Voice Live gateway for a provisional live transcript.
+2. **Stop Recording** — the local PCM buffer is assembled into a WAV file and POSTed to `POST /api/encounters/{id}/audio`.
+3. The backend uploads the WAV to Blob Storage, calls `transcribe_audio_rest()` with diarization enabled, and writes the result into the encounter.
+4. The frontend replaces the provisional draft with the server-returned transcript and displays the detected speaker count.
+5. **Process Clinically** — the clinician reviews and approves the draft, then entity extraction, relation mapping, summaries, and FHIR export run on the approved text with the stored diarization metadata.
+
+| Aspect | Direct file upload | Ambient capture |
+|---|---|---|
+| Transcription engine | Azure Speech Fast Transcription | Same |
+| Diarization | Yes | Yes |
+| Draft review step | No (immediate processing) | Yes — clinician approval required |
+| Clinical processing trigger | Automatic after upload | Explicit **Process Clinically** click |
+
+### Frontend Behavior
+
+The supported frontend is `frontend-react/`. Update runtime endpoints in `frontend-react/public/config.js`, and adjust feature behavior in the relevant modules under `frontend-react/src/`.
 
 ---
 

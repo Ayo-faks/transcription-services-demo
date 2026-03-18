@@ -3,6 +3,9 @@ azure-functions
 azure-storage-blob
 azure-cosmos
 azure-identity
+azure-search-documents
+azure-core
+azure-monitor-opentelemetry
 
 # HTTP requests
 requests

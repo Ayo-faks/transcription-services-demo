@@ -1,0 +1,18 @@
+{
+  "auth_typ": "google",
+  "claims": [
+    {
+      "typ": "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier",
+      "val": "google-sub-456"
+    },
+    {
+      "typ": "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
+      "val": "developer@gmail.com"
+    },
+    {
+      "typ": "name",
+      "val": "Dev User"
+    }
+  ],
+  "identity_provider": "google"
+}

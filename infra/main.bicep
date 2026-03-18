@@ -14,9 +14,42 @@ param baseName string = 'healthtranscript'
 @allowed(['dev', 'staging', 'prod'])
 param environment string = 'dev'
 
+@description('Allowed browser origin for CORS.')
+param allowedOrigin string = ''
+
+@description('Microsoft Entra app registration client ID for Easy Auth.')
+param microsoftProviderClientId string = ''
+
+@description('Key Vault reference value for the Microsoft provider client secret app setting.')
+@secure()
+param microsoftProviderClientSecretReference string = ''
+
+@description('Google OAuth client ID for Easy Auth.')
+param googleProviderClientId string = ''
+
+@description('Key Vault reference value for the Google provider client secret app setting.')
+@secure()
+param googleProviderClientSecretReference string = ''
+
+@description('Optional default tenant ID used to auto-assign first-time users in bootstrap flows.')
+param defaultTenantId string = ''
+
+@description('Days after modification before encounter audio moves to the Cool tier.')
+param audioBlobCoolTierDays int = 30
+
+@description('Days after modification before encounter audio moves to the Archive tier.')
+param audioBlobArchiveTierDays int = 180
+
+@description('Days after modification before encounter audio is deleted.')
+param audioBlobDeleteDays int = 2920
+
 // Generate unique suffix for globally unique names
 var uniqueSuffix = uniqueString(resourceGroup().id)
 var resourceBaseName = '${baseName}-${environment}'
+var easyAuthEnabled = !empty(microsoftProviderClientId) || !empty(googleProviderClientId)
+var frontendStorageAccountName = toLower('${take(baseName, 10)}${take(uniqueSuffix, 8)}web')
+var derivedFrontendOrigin = 'https://${frontendStorageAccountName}.z33.web.${az.environment().suffixes.storage}'
+var effectiveAllowedOrigin = empty(allowedOrigin) ? derivedFrontendOrigin : allowedOrigin
 
 // Role definition IDs for RBAC
 var storageBlobDataOwnerRoleId = 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b'
@@ -24,6 +57,9 @@ var storageQueueDataContributorRoleId = '974c5e8b-45b9-4653-ba55-5f855dd0fb88'
 var cognitiveServicesUserRoleId = 'a97b65f3-24c7-4388-baec-2e87135dc908'
 var cognitiveServicesOpenAIUserRoleId = '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd' // Cognitive Services OpenAI User
 var cosmosDbDataContributorRoleId = '00000000-0000-0000-0000-000000000002' // Cosmos DB Built-in Data Contributor
+var searchServiceContributorRoleId = '7ca78c08-252a-4471-8644-bb5ff32d4ba0'
+var searchIndexDataContributorRoleId = '8ebe5a00-799e-43f5-93ac-243d3dce84a7'
+var searchIndexDataReaderRoleId = '1407120a-92aa-4202-b7e9-c0e197c71c8f'
 
 // ============================================================================
 // Storage Account - For audio files and function app
@@ -63,9 +99,48 @@ resource audioContainer 'Microsoft.Storage/storageAccounts/blobServices/containe
   }
 }
 
+resource storageLifecyclePolicy 'Microsoft.Storage/storageAccounts/managementPolicies@2023-01-01' = {
+  parent: storageAccount
+  name: 'default'
+  properties: {
+    policy: {
+      rules: [
+        {
+          name: 'encounter-audio-tier-and-retain'
+          enabled: true
+          type: 'Lifecycle'
+          definition: {
+            actions: {
+              baseBlob: {
+                tierToCool: {
+                  daysAfterModificationGreaterThan: audioBlobCoolTierDays
+                }
+                tierToArchive: {
+                  daysAfterModificationGreaterThan: audioBlobArchiveTierDays
+                }
+                delete: {
+                  daysAfterModificationGreaterThan: audioBlobDeleteDays
+                }
+              }
+            }
+            filters: {
+              blobTypes: [
+                'blockBlob'
+              ]
+              prefixMatch: [
+                'encounters/'
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}
+
 // Dedicated frontend storage account for UK-only static website hosting
 resource frontendStorageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
-  name: toLower('${take(baseName, 10)}${take(uniqueSuffix, 8)}web')
+  name: frontendStorageAccountName
   location: location
   sku: {
     name: 'Standard_LRS'
@@ -136,6 +211,77 @@ resource cosmosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
         paths: ['/id']
         kind: 'Hash'
       }
+      indexingPolicy: {
+        compositeIndexes: [
+          [
+            {
+              path: '/tenant_id'
+              order: 'ascending'
+            }
+            {
+              path: '/created_at'
+              order: 'descending'
+            }
+          ]
+        ]
+      }
+    }
+  }
+}
+
+resource platformUsersContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2023-11-15' = {
+  parent: cosmosDatabase
+  name: 'platform_users'
+  properties: {
+    resource: {
+      id: 'platform_users'
+      partitionKey: {
+        paths: ['/issuer_subject']
+        kind: 'Hash'
+      }
+    }
+  }
+}
+
+resource platformTenantsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2023-11-15' = {
+  parent: cosmosDatabase
+  name: 'platform_tenants'
+  properties: {
+    resource: {
+      id: 'platform_tenants'
+      partitionKey: {
+        paths: ['/id']
+        kind: 'Hash'
+      }
+    }
+  }
+}
+
+resource platformVoiceSessionsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2023-11-15' = {
+  parent: cosmosDatabase
+  name: 'platform_voice_sessions'
+  properties: {
+    resource: {
+      id: 'platform_voice_sessions'
+      partitionKey: {
+        paths: ['/id']
+        kind: 'Hash'
+      }
+      defaultTtl: 900
+    }
+  }
+}
+
+resource platformAuditLogContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2023-11-15' = {
+  parent: cosmosDatabase
+  name: 'platform_audit_log'
+  properties: {
+    resource: {
+      id: 'platform_audit_log'
+      partitionKey: {
+        paths: ['/tenant_id']
+        kind: 'Hash'
+      }
     }
   }
 }
@@ -182,6 +328,28 @@ resource openAIService 'Microsoft.CognitiveServices/accounts@2023-10-01-preview'
     customSubDomainName: '${resourceBaseName}-openai-${take(uniqueSuffix, 6)}'
     publicNetworkAccess: 'Enabled'
     disableLocalAuth: true // Enforce managed identity auth
+  }
+}
+
+// ============================================================================
+// Azure AI Search - Encounter-local retrieval backend
+// ============================================================================
+resource searchService 'Microsoft.Search/searchServices@2023-11-01' = {
+  name: '${resourceBaseName}-search-${take(uniqueSuffix, 6)}'
+  location: location
+  sku: {
+    name: 'basic'
+  }
+  properties: {
+    hostingMode: 'default'
+    publicNetworkAccess: 'enabled'
+    replicaCount: 1
+    partitionCount: 1
+  }
+  tags: {
+    workload: 'healthtranscribe'
+    role: 'clinical-context-retrieval'
+    environment: environment
   }
 }
 
@@ -251,7 +419,7 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
       pythonVersion: '3.11'
       linuxFxVersion: 'Python|3.11'
       cors: {
-        allowedOrigins: ['*']
+        allowedOrigins: [effectiveAllowedOrigin]
       }
       appSettings: [
         // Storage - Managed Identity binding
@@ -270,17 +438,88 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
         // Azure OpenAI - Managed Identity (no keys)
         { name: 'AZURE_OPENAI_ENDPOINT', value: openAIService.properties.endpoint }
         { name: 'AZURE_OPENAI_DEPLOYMENT', value: gpt4oMiniDeployment.name }
+        { name: 'AZURE_OPENAI_EMBEDDING_DEPLOYMENT', value: 'text-embedding-3-small' }
+        { name: 'AZURE_OPENAI_EMBEDDING_MODEL', value: 'text-embedding-3-small' }
+        { name: 'AZURE_OPENAI_EMBEDDING_DIMENSIONS', value: '1536' }
+        // Azure AI Search - Managed Identity
+        { name: 'AZURE_SEARCH_ENDPOINT', value: 'https://${searchService.name}.search.windows.net' }
+        { name: 'AZURE_SEARCH_INDEX_NAME', value: 'clinical-context' }
         // Cosmos DB - Managed Identity (no connection string)
         { name: 'COSMOS_ENDPOINT', value: cosmosAccount.properties.documentEndpoint }
         { name: 'COSMOS_DATABASE_NAME', value: cosmosDatabase.name }
         { name: 'COSMOS_CONTAINER_NAME', value: cosmosContainer.name }
+        { name: 'PLATFORM_USERS_CONTAINER_NAME', value: platformUsersContainer.name }
+        { name: 'PLATFORM_TENANTS_CONTAINER_NAME', value: platformTenantsContainer.name }
+        { name: 'PLATFORM_VOICE_SESSIONS_CONTAINER_NAME', value: platformVoiceSessionsContainer.name }
+        { name: 'PLATFORM_AUDIT_LOG_CONTAINER_NAME', value: platformAuditLogContainer.name }
         // Storage for blob operations
         { name: 'STORAGE_ACCOUNT_NAME', value: storageAccount.name }
         { name: 'STORAGE_CONTAINER_NAME', value: 'audio-files' }
+        { name: 'DEFAULT_TENANT_ID', value: defaultTenantId }
+        { name: 'MICROSOFT_PROVIDER_AUTHENTICATION_SECRET', value: microsoftProviderClientSecretReference }
+        { name: 'GOOGLE_PROVIDER_AUTHENTICATION_SECRET', value: googleProviderClientSecretReference }
         // Build settings
         { name: 'SCM_DO_BUILD_DURING_DEPLOYMENT', value: 'true' }
         { name: 'ENABLE_ORYX_BUILD', value: 'true' }
       ]
+    }
+  }
+}
+
+resource functionAppAuth 'Microsoft.Web/sites/config@2022-09-01' = {
+  parent: functionApp
+  name: 'authsettingsV2'
+  properties: {
+    platform: {
+      enabled: easyAuthEnabled
+      runtimeVersion: '~1'
+    }
+    globalValidation: {
+      requireAuthentication: easyAuthEnabled
+      unauthenticatedClientAction: 'Return401'
+      excludedPaths: [
+        '/api/health'
+      ]
+    }
+    httpSettings: {
+      requireHttps: true
+      routes: {
+        apiPrefix: '/.auth'
+      }
+    }
+    login: {
+      tokenStore: {
+        enabled: true
+      }
+    }
+    identityProviders: {
+      azureActiveDirectory: {
+        enabled: !empty(microsoftProviderClientId)
+        login: {
+          loginParameters: [
+            'scope=openid profile email'
+          ]
+        }
+        registration: {
+          clientId: microsoftProviderClientId
+          clientSecretSettingName: 'MICROSOFT_PROVIDER_AUTHENTICATION_SECRET'
+          openIdIssuer: '${az.environment().authentication.loginEndpoint}organizations/v2.0'
+        }
+      }
+      google: {
+        enabled: !empty(googleProviderClientId)
+        login: {
+          scopes: [
+            'openid'
+            'profile'
+            'email'
+          ]
+        }
+        registration: {
+          clientId: googleProviderClientId
+          clientSecretSettingName: 'GOOGLE_PROVIDER_AUTHENTICATION_SECRET'
+        }
+      }
     }
   }
 }
@@ -377,16 +616,52 @@ resource cosmosDbRole 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@
 }
 
 // ============================================================================
+// RBAC - Azure AI Search data-plane and index management access
+// ============================================================================
+resource searchServiceContributorRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(searchService.id, functionApp.id, searchServiceContributorRoleId)
+  scope: searchService
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', searchServiceContributorRoleId)
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource searchIndexDataContributorRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(searchService.id, functionApp.id, searchIndexDataContributorRoleId)
+  scope: searchService
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', searchIndexDataContributorRoleId)
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource searchIndexDataReaderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(searchService.id, functionApp.id, searchIndexDataReaderRoleId)
+  scope: searchService
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', searchIndexDataReaderRoleId)
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// ============================================================================
 // Outputs - Used by GitHub Actions for deployment
 // ============================================================================
 output functionAppName string = functionApp.name
 output functionAppUrl string = 'https://${functionApp.properties.defaultHostName}'
 output frontendStorageAccountName string = frontendStorageAccount.name
 output frontendWebsiteUrl string = frontendStorageAccount.properties.primaryEndpoints.web
+output effectiveAllowedOrigin string = effectiveAllowedOrigin
 output speechServiceEndpoint string = speechService.properties.endpoint
 output languageServiceEndpoint string = languageService.properties.endpoint
 output openAIServiceEndpoint string = openAIService.properties.endpoint
 output openAIDeploymentName string = gpt4oMiniDeployment.name
+output searchServiceEndpoint string = 'https://${searchService.name}.search.windows.net'
+output searchIndexName string = 'clinical-context'
 output cosmosAccountEndpoint string = cosmosAccount.properties.documentEndpoint
 output storageAccountName string = storageAccount.name
 output resourceGroup string = resourceGroup().name

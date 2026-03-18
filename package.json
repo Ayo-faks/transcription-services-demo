@@ -1,5 +1,15 @@
 {
-  "dependencies": {
-    "@playwright/test": "^1.57.0"
+  "scripts": {
+    "start:storage": "./node_modules/.bin/azurite --location .azurite --silent",
+    "start:functions": "./start-functions-local.sh",
+    "configure:frontend:local": "bash ./configure-frontend.sh http://127.0.0.1:7072/api",
+    "test:retrieval-regression": "node ./node_modules/playwright/cli.js test tests/retrieval-hardening.spec.cjs",
+    "test:smoke-clinician-flow": "node ./node_modules/playwright/cli.js test tests/clinician-flow-smoke.spec.cjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.57.0",
+    "azure-functions-core-tools": "^4.8.0",
+    "azurite": "^3.35.0",
+    "playwright": "^1.57.0"
   }
 }
