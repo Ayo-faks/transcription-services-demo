@@ -459,8 +459,10 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
         { name: 'MICROSOFT_PROVIDER_AUTHENTICATION_SECRET', value: microsoftProviderClientSecretReference }
         { name: 'GOOGLE_PROVIDER_AUTHENTICATION_SECRET', value: googleProviderClientSecretReference }
         // Build settings
-        { name: 'SCM_DO_BUILD_DURING_DEPLOYMENT', value: 'true' }
-        { name: 'ENABLE_ORYX_BUILD', value: 'true' }
+        { name: 'SCM_DO_BUILD_DURING_DEPLOYMENT', value: 'false' }
+        { name: 'ENABLE_ORYX_BUILD', value: 'false' }
+        { name: 'WEBSITE_RUN_FROM_PACKAGE', value: '1' }
+        { name: 'AzureWebJobsFeatureFlags', value: 'EnableWorkerIndexing' }
       ]
     }
   }

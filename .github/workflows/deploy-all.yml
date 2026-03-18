@@ -172,6 +172,7 @@ jobs:
               SCM_DO_BUILD_DURING_DEPLOYMENT=false \
               ENABLE_ORYX_BUILD=false \
               WEBSITE_RUN_FROM_PACKAGE=1 \
+              AzureWebJobsFeatureFlags=EnableWorkerIndexing \
             --output none
 
       - name: Deploy Function App

@@ -32,8 +32,13 @@ if _ai_connection_string:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("function_app")
 
+class StableFunctionApp(func.FunctionApp):
+    def get_functions(self):
+        self.functions_bindings = {}
+        return super().get_functions()
+
 # Create the main function app
-app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
+app = StableFunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
 LOCAL_DEV_AUTH = os.environ.get("LOCAL_DEV_AUTH", "").lower() == "true"
 AZURE_FUNCTIONS_ENVIRONMENT = os.environ.get("AZURE_FUNCTIONS_ENVIRONMENT", "Production")
