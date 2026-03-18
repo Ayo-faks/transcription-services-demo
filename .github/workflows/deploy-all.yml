@@ -150,11 +150,11 @@ jobs:
           mkdir -p .generated-functions
 
           python - <<'PY'
-          import json
           import pathlib
           import sys
 
           sys.path.insert(0, '.')
+          sys.path.insert(0, str(pathlib.Path('.python_packages/lib/site-packages').resolve()))
           import function_app
 
           output_root = pathlib.Path('.generated-functions')
