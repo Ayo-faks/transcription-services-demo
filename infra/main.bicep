@@ -463,6 +463,7 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
         { name: 'ENABLE_ORYX_BUILD', value: 'false' }
         { name: 'WEBSITE_RUN_FROM_PACKAGE', value: '1' }
         { name: 'AzureWebJobsFeatureFlags', value: 'EnableWorkerIndexing' }
+        { name: 'PYTHON_ENABLE_INIT_INDEXING', value: '1' }
       ]
     }
   }

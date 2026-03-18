@@ -152,6 +152,10 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
           name: 'AzureWebJobsFeatureFlags'
           value: 'EnableWorkerIndexing'
         }
+        {
+          name: 'PYTHON_ENABLE_INIT_INDEXING'
+          value: '1'
+        }
       ]
     }
   }
