@@ -19,18 +19,25 @@ from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from typing import Optional
 
-# Application Insights — structured telemetry (must run before logger creation)
-_ai_connection_string = os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING")
-if _ai_connection_string:
-    from azure.monitor.opentelemetry import configure_azure_monitor
-    configure_azure_monitor(
-        connection_string=_ai_connection_string,
-        logger_name="function_app",
-    )
-
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("function_app")
+
+# Application Insights — Azure Functions has built-in App Insights integration
+# via the host. Manual configure_azure_monitor() conflicts with the host's own
+# telemetry pipeline and can crash the Python worker before it indexes functions.
+# Only call configure_azure_monitor() outside Azure Functions (e.g. standalone).
+_ai_connection_string = os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING")
+_is_azure_functions = os.environ.get("FUNCTIONS_WORKER_RUNTIME") is not None
+if _ai_connection_string and not _is_azure_functions:
+    try:
+        from azure.monitor.opentelemetry import configure_azure_monitor
+        configure_azure_monitor(
+            connection_string=_ai_connection_string,
+            logger_name="function_app",
+        )
+    except Exception:
+        logger.warning("Failed to configure Azure Monitor OpenTelemetry, continuing without it")
 
 class StableFunctionApp(func.FunctionApp):
     def get_functions(self):

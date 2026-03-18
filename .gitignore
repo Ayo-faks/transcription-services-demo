@@ -111,6 +111,13 @@ secrets/
 .venv-1
 logs.zipdeploy.zip
 
+# Deployment artifacts
+.generated-functions/
+.python_packages/
+deploy-*.zip
+deployed-package-check/
+staging-function-logs.zip
+
 # Backup files
 *_original.py
 *_simple.py
