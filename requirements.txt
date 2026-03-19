@@ -1,18 +1,18 @@
 # Azure Functions (minimal dependencies)
-azure-functions
-azure-storage-blob
-azure-cosmos
-azure-identity
-azure-search-documents
-azure-core
-azure-monitor-opentelemetry
+azure-functions==1.24.0
+azure-storage-blob==12.28.0
+azure-cosmos==4.15.0
+azure-identity==1.25.3
+azure-search-documents==11.6.0
+azure-core==1.39.0
+azure-monitor-opentelemetry==1.8.6
 
 # HTTP requests
-requests
+requests==2.31.0
 
 # Data processing (lightweight)
-python-dotenv
+python-dotenv==1.2.1
 
 # PDF generation for clinical summaries
-fpdf2
-markdown
+fpdf2==2.8.7
+markdown==3.10.2
