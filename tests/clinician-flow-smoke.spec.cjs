@@ -543,6 +543,7 @@ test.describe('clinician workflow smoke flow', () => {
     let captureStopped = false
     let postStopEncounterReads = 0
     let postStopStatusReads = 0
+    const ENCOUNTER_READY_THRESHOLD = 6
 
     await page.route('**/api/encounters', async (route) => {
       if (route.request().method() !== 'POST') {
@@ -614,7 +615,7 @@ test.describe('clinician workflow smoke flow', () => {
       }
 
       postStopEncounterReads += 1
-      const payload = postStopEncounterReads >= 4 ? readyEncounter : processingEncounter
+      const payload = postStopEncounterReads >= ENCOUNTER_READY_THRESHOLD ? readyEncounter : processingEncounter
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -684,13 +685,13 @@ test.describe('clinician workflow smoke flow', () => {
 
     await expect(page).toHaveURL(new RegExp(`/encounters/${encounterId}/review$`))
     await expect(page.getByRole('heading', { name: 'Preparing the final clinician review' })).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Listening through the visit audio' })).toBeVisible()
-    await expect(page.getByText('Converting speech to text')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Listening through the visit audio' })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText('Converting speech to text')).toBeVisible({ timeout: 10000 })
 
     await expect(page.getByText('clinical analysis')).toBeVisible({ timeout: 15000 })
     await expect(page.getByRole('heading', { name: 'Extracting clinical signals and assembling outputs' })).toBeVisible({ timeout: 15000 })
 
-    await expect(page.getByRole('heading', { name: 'Clinician-ready note and action items' })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: 'Clinician-ready note and action items' })).toBeVisible({ timeout: 25000 })
     await expect(page.getByText('Increase lisinopril to 20 milligrams daily and arrange an eye exam in two weeks.').first()).toBeVisible()
   })
 

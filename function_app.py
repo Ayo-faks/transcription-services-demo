@@ -77,6 +77,11 @@ CLAIM_TYPE_MAP = {
     "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier": "sub",
     "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress": "email",
     "name": "name",
+    "sub": "sub",
+    "oid": "sub",
+    "email": "email",
+    "preferred_username": "email",
+    "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name": "name",
 }
 
 ISSUER_MAP = {
@@ -1222,9 +1227,15 @@ def get_authenticated_context(req: func.HttpRequest, config: AzureConfig, *, all
 
     if principal_header:
         principal = _decode_easy_auth_principal(principal_header)
+        idp_header = normalize_context_value(req.headers.get("X-MS-CLIENT-PRINCIPAL-IDP"))
+        if idp_header:
+            principal.setdefault("identity_provider", idp_header)
+            principal.setdefault("identityProvider", idp_header)
         claims = _normalize_claims(principal)
         claims.setdefault("name", normalize_context_value(req.headers.get("X-MS-CLIENT-PRINCIPAL-NAME")))
         claims.setdefault("sub", normalize_context_value(req.headers.get("X-MS-CLIENT-PRINCIPAL-ID")))
+        if not normalize_context_value(claims.get("issuer")) and idp_header:
+            claims["issuer"] = ISSUER_MAP.get(idp_header, idp_header)
     else:
         claims = _build_local_dev_claims(req)
 

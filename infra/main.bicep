@@ -17,6 +17,9 @@ param environment string = 'dev'
 @description('Allowed browser origin for CORS.')
 param allowedOrigin string = ''
 
+@description('Custom domain for the frontend (e.g. https://scribe-staging.wulo.ai). Added to CORS and auth redirects when set.')
+param customDomain string = ''
+
 @description('Microsoft Entra app registration client ID for Easy Auth.')
 param microsoftProviderClientId string = ''
 
@@ -50,6 +53,8 @@ var easyAuthEnabled = !empty(microsoftProviderClientId) || !empty(googleProvider
 var frontendStorageAccountName = toLower('${take(baseName, 10)}${take(uniqueSuffix, 8)}web')
 var derivedFrontendOrigin = 'https://${frontendStorageAccountName}.z33.web.${az.environment().suffixes.storage}'
 var effectiveAllowedOrigin = empty(allowedOrigin) ? derivedFrontendOrigin : allowedOrigin
+var corsOrigins = empty(customDomain) ? [effectiveAllowedOrigin] : [effectiveAllowedOrigin, customDomain]
+var authRedirectUrls = empty(customDomain) ? [effectiveAllowedOrigin] : [effectiveAllowedOrigin, customDomain]
 
 // Role definition IDs for RBAC
 var storageBlobDataOwnerRoleId = 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b'
@@ -419,7 +424,8 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
       pythonVersion: '3.11'
       linuxFxVersion: 'Python|3.11'
       cors: {
-        allowedOrigins: [effectiveAllowedOrigin]
+        allowedOrigins: corsOrigins
+        supportCredentials: true
       }
       appSettings: [
         // Storage - Managed Identity binding
@@ -494,6 +500,7 @@ resource functionAppAuth 'Microsoft.Web/sites/config@2022-09-01' = {
       tokenStore: {
         enabled: true
       }
+      allowedExternalRedirectUrls: authRedirectUrls
     }
     identityProviders: {
       azureActiveDirectory: {

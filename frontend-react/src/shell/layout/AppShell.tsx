@@ -95,7 +95,7 @@ export function AppShell() {
     <div className="app-shell">
       <aside className="shell-sidebar">
         <div className="shell-brand">
-          <img src="/logo.png" alt="Wulo" className="shell-brand-logo" width="36" height="36" />
+          <img src="/logo.png" alt="Wulo" className="shell-brand-logo" width="48" height="48" />
           <div>
             <p className="shell-eyebrow">Clinical Notes</p>
             <h1>{platform.appTitle}</h1>

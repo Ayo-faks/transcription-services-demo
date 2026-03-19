@@ -62,6 +62,41 @@ venv.bak/
 # Azure Functions
 local.settings.json
 .python_packages/
+# Auto-generated function.json directories (Python v2 model)
+abort_encounter_audio_session/
+add_tenant_member/
+append_encounter_audio_chunk/
+append_encounter_segments/
+approve_encounter_review/
+create_encounter/
+create_tenant/
+create_voice_session/
+finalize_encounter_audio_session/
+finalize_encounter_draft/
+get_auth_session/
+get_encounter/
+get_encounter_context/
+get_encounter_results/
+get_operational_context/
+get_results/
+get_status/
+get_summary/
+get_summary_pdf/
+get_summary_txt/
+health_check/
+ingest_encounter_audio/
+list_jobs/
+preview_encounter_actions/
+process_encounter/
+process_transcription/
+query_encounter_assistant/
+regenerate_encounter_review/
+save_encounter_draft/
+save_encounter_review/
+start_encounter_audio_session/
+start_encounter_capture/
+stop_encounter_capture/
+upload_audio/
 
 # Node.js
 node_modules/

@@ -93,7 +93,7 @@ export function AuthGateScreen({
     return (
       <AuthGateCard>
         <div className="auth-brand-lockup auth-brand-lockup-centered">
-          <img src="/logo.png" alt="Wulo" className="auth-brand-logo" width="28" height="28" />
+          <img src="/logo.png" alt="Wulo" className="auth-brand-logo" width="40" height="40" />
           <strong>Wulo</strong>
         </div>
         <p className="auth-gate-eyebrow">Authentication</p>
@@ -108,7 +108,7 @@ export function AuthGateScreen({
     return (
       <AuthGateCard>
         <div className="auth-brand-lockup auth-brand-lockup-centered">
-          <img src="/logo.png" alt="Wulo" className="auth-brand-logo" width="28" height="28" />
+          <img src="/logo.png" alt="Wulo" className="auth-brand-logo" width="40" height="40" />
           <strong>Wulo</strong>
         </div>
         <p className="auth-gate-eyebrow">Authentication</p>
@@ -125,7 +125,7 @@ export function AuthGateScreen({
     return (
       <AuthGateCard>
         <div className="auth-brand-lockup auth-brand-lockup-centered">
-          <img src="/logo.png" alt="Wulo" className="auth-brand-logo" width="28" height="28" />
+          <img src="/logo.png" alt="Wulo" className="auth-brand-logo" width="40" height="40" />
           <strong>Wulo</strong>
         </div>
         <p className="auth-gate-eyebrow">Welcome back</p>
@@ -162,7 +162,7 @@ export function AuthGateScreen({
     return (
       <AuthGateCard>
         <div className="auth-brand-lockup auth-brand-lockup-centered">
-          <img src="/logo.png" alt="Wulo" className="auth-brand-logo" width="28" height="28" />
+          <img src="/logo.png" alt="Wulo" className="auth-brand-logo" width="40" height="40" />
           <strong>Wulo</strong>
         </div>
         <p className="auth-gate-eyebrow">Tenant access</p>
@@ -190,7 +190,7 @@ export function AuthGateScreen({
     return (
       <AuthGateCard>
         <div className="auth-brand-lockup auth-brand-lockup-centered">
-          <img src="/logo.png" alt="Wulo" className="auth-brand-logo" width="28" height="28" />
+          <img src="/logo.png" alt="Wulo" className="auth-brand-logo" width="40" height="40" />
           <strong>Wulo</strong>
         </div>
         <p className="auth-gate-eyebrow">Tenant selection</p>
