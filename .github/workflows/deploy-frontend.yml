@@ -24,6 +24,14 @@ on:
         description: 'Existing Function App name for runtime API config override'
         required: false
         default: ''
+      apiBaseUrlOverride:
+        description: 'Optional explicit frontend runtime apiBaseUrl override, for example https://auth-staging.wulo.ai/api'
+        required: false
+        default: ''
+      authBaseUrlOverride:
+        description: 'Optional explicit frontend runtime authBaseUrl override, for example https://auth-staging.wulo.ai'
+        required: false
+        default: ''
       storageAccountName:
         description: 'Frontend storage account name (optional)'
         required: false
@@ -31,6 +39,10 @@ on:
         description: 'Optional Voice Live gateway base URL override for frontend config.js'
         required: false
         default: ''
+      frontendSameOrigin:
+        description: 'Set true when the public frontend domain proxies /api and /.auth to the Function App so the SPA should use same-origin runtime URLs.'
+        required: false
+        default: 'false'
 
 env:
   AZURE_RESOURCE_GROUP: ${{ github.event.inputs.resourceGroup || 'healthtranscribe-uk-rg' }}
@@ -76,25 +88,60 @@ jobs:
         run: |
           FUNC_NAME="${{ github.event.inputs.functionAppName }}"
           VOICE_LIVE_GATEWAY_BASE_URL="${{ github.event.inputs.voiceLiveGatewayBaseUrl }}"
+          FRONTEND_SAME_ORIGIN="${{ github.event.inputs.frontendSameOrigin }}"
+          API_BASE_URL_OVERRIDE="${{ github.event.inputs.apiBaseUrlOverride }}"
+          AUTH_BASE_URL_OVERRIDE="${{ github.event.inputs.authBaseUrlOverride }}"
 
           if [ -z "$FUNC_NAME" ]; then
             FUNC_NAME=$(az functionapp list -g ${{ env.AZURE_RESOURCE_GROUP }} --query "[0].name" -o tsv 2>/dev/null || echo "")
           fi
 
           if [ -n "$FUNC_NAME" ]; then
-            API_BASE_URL="https://${FUNC_NAME}.azurewebsites.net/api"
+            RAW_API_BASE_URL="https://${FUNC_NAME}.azurewebsites.net/api"
+            RAW_AUTH_BASE_URL="https://${FUNC_NAME}.azurewebsites.net"
+            API_BASE_URL="$RAW_API_BASE_URL"
+            AUTH_BASE_URL="$RAW_AUTH_BASE_URL"
+
+            if [ "$FRONTEND_SAME_ORIGIN" = "true" ]; then
+              API_BASE_URL="/api"
+              AUTH_BASE_URL=""
+            fi
+
+            if [ -n "$API_BASE_URL_OVERRIDE" ]; then
+              API_BASE_URL="${API_BASE_URL_OVERRIDE%/}"
+            fi
+
+            if [ -n "$AUTH_BASE_URL_OVERRIDE" ]; then
+              AUTH_BASE_URL="${AUTH_BASE_URL_OVERRIDE%/}"
+            elif [ -n "$API_BASE_URL_OVERRIDE" ]; then
+              if [ "$API_BASE_URL" = "/api" ]; then
+                AUTH_BASE_URL=""
+              elif [[ "$API_BASE_URL" == */api ]]; then
+                AUTH_BASE_URL="${API_BASE_URL%/api}"
+              else
+                AUTH_BASE_URL="$API_BASE_URL"
+              fi
+            fi
+
             echo "✓ Found Function App: $FUNC_NAME"
 
             perl -0pi -e "s|window\\.APP_CONFIG\\.apiBaseUrl = '.*?';|window.APP_CONFIG.apiBaseUrl = '$API_BASE_URL';|" frontend-react/public/config.js
+            perl -0pi -e "s|window\.APP_CONFIG\.authBaseUrl = '.*?';|window.APP_CONFIG.authBaseUrl = '$AUTH_BASE_URL';|" frontend-react/public/config.js
 
             if [ -n "$VOICE_LIVE_GATEWAY_BASE_URL" ]; then
               perl -0pi -e "s|gatewayBaseUrl: '.*?'|gatewayBaseUrl: '$VOICE_LIVE_GATEWAY_BASE_URL'|" frontend-react/public/config.js
             fi
 
             grep -q "window.APP_CONFIG.apiBaseUrl = '$API_BASE_URL';" frontend-react/public/config.js
+            grep -q "window.APP_CONFIG.authBaseUrl = '$AUTH_BASE_URL';" frontend-react/public/config.js
             grep -q "window.APP_CONFIG.voiceLive" frontend-react/public/config.js
 
-            echo "✓ Frontend configured for: $API_BASE_URL"
+            echo "✓ Frontend configured for API: $API_BASE_URL"
+            if [ -n "$AUTH_BASE_URL" ]; then
+              echo "✓ Frontend configured for auth origin: $AUTH_BASE_URL"
+            else
+              echo "✓ Frontend configured for same-origin auth routes"
+            fi
           else
             echo "⚠️ Could not find Function App - using existing configuration"
           fi
@@ -178,6 +225,7 @@ jobs:
 
           CONFIG_JS=$(curl -fsS --retry 6 --retry-delay 10 --retry-all-errors "${URL}config.js")
           printf "%s" "$CONFIG_JS" | grep -q 'apiBaseUrl'
+          printf "%s" "$CONFIG_JS" | grep -q 'authBaseUrl'
           printf "%s" "$CONFIG_JS" | grep -q 'voiceLive'
           printf "%s" "$CONFIG_JS" | grep -q 'gatewayBaseUrl'
 

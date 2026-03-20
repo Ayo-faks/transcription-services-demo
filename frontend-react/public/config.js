@@ -1,6 +1,7 @@
 window.APP_CONFIG = window.APP_CONFIG || {};
 
-window.APP_CONFIG.apiBaseUrl = 'https://healthtranscript-staging-func-t6fmsx.azurewebsites.net/api';
+window.APP_CONFIG.apiBaseUrl = 'https://auth-staging.wulo.ai/api';
+window.APP_CONFIG.authBaseUrl = 'https://auth-staging.wulo.ai';
 
 window.APP_CONFIG.voiceLive = window.APP_CONFIG.voiceLive || {
     gatewayBaseUrl: 'https://ca-web-zf52hos5pogn4.calmcoast-f5c04f8a.swedencentral.azurecontainerapps.io',

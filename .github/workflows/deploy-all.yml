@@ -22,6 +22,14 @@ on:
         description: 'Existing Function App name when skipping infrastructure'
         required: false
         default: ''
+      apiBaseUrlOverride:
+        description: 'Optional explicit frontend runtime apiBaseUrl override, for example https://auth-staging.wulo.ai/api'
+        required: false
+        default: ''
+      authBaseUrlOverride:
+        description: 'Optional explicit frontend runtime authBaseUrl override, for example https://auth-staging.wulo.ai'
+        required: false
+        default: ''
       location:
         description: 'Azure region'
         required: true
@@ -30,6 +38,10 @@ on:
         description: 'Frontend origin for Function App CORS and Easy Auth redirects'
         required: false
         default: ''
+      frontendSameOrigin:
+        description: 'Set true when the public frontend domain proxies /api and /.auth to the Function App so the SPA should use same-origin runtime URLs.'
+        required: false
+        default: 'false'
       voiceLiveGatewayBaseUrl:
         description: 'Optional Voice Live gateway base URL override for frontend config.js'
         required: false
@@ -355,19 +367,53 @@ jobs:
       - name: Update frontend configuration
         run: |
           FUNC_NAME="${{ steps.frontend_func_name.outputs.name }}"
-          API_BASE_URL="https://${FUNC_NAME}.azurewebsites.net/api"
+          RAW_API_BASE_URL="https://${FUNC_NAME}.azurewebsites.net/api"
+          RAW_AUTH_BASE_URL="https://${FUNC_NAME}.azurewebsites.net"
+          API_BASE_URL="$RAW_API_BASE_URL"
+          AUTH_BASE_URL="$RAW_AUTH_BASE_URL"
           VOICE_LIVE_GATEWAY_BASE_URL="${{ github.event.inputs.voiceLiveGatewayBaseUrl }}"
+          FRONTEND_SAME_ORIGIN="${{ github.event.inputs.frontendSameOrigin }}"
+          API_BASE_URL_OVERRIDE="${{ github.event.inputs.apiBaseUrlOverride }}"
+          AUTH_BASE_URL_OVERRIDE="${{ github.event.inputs.authBaseUrlOverride }}"
+
+          if [ "$FRONTEND_SAME_ORIGIN" = "true" ]; then
+            API_BASE_URL="/api"
+            AUTH_BASE_URL=""
+          fi
+
+          if [ -n "$API_BASE_URL_OVERRIDE" ]; then
+            API_BASE_URL="${API_BASE_URL_OVERRIDE%/}"
+          fi
+
+          if [ -n "$AUTH_BASE_URL_OVERRIDE" ]; then
+            AUTH_BASE_URL="${AUTH_BASE_URL_OVERRIDE%/}"
+          elif [ -n "$API_BASE_URL_OVERRIDE" ]; then
+            if [ "$API_BASE_URL" = "/api" ]; then
+              AUTH_BASE_URL=""
+            elif [[ "$API_BASE_URL" == */api ]]; then
+              AUTH_BASE_URL="${API_BASE_URL%/api}"
+            else
+              AUTH_BASE_URL="$API_BASE_URL"
+            fi
+          fi
 
           perl -0pi -e "s|window\\.APP_CONFIG\\.apiBaseUrl = '.*?';|window.APP_CONFIG.apiBaseUrl = '$API_BASE_URL';|" frontend-react/public/config.js
+          perl -0pi -e "s|window\.APP_CONFIG\.authBaseUrl = '.*?';|window.APP_CONFIG.authBaseUrl = '$AUTH_BASE_URL';|" frontend-react/public/config.js
 
           if [ -n "$VOICE_LIVE_GATEWAY_BASE_URL" ]; then
             perl -0pi -e "s|gatewayBaseUrl: '.*?'|gatewayBaseUrl: '$VOICE_LIVE_GATEWAY_BASE_URL'|" frontend-react/public/config.js
           fi
 
           grep -q "window.APP_CONFIG.apiBaseUrl = '$API_BASE_URL';" frontend-react/public/config.js
+          grep -q "window.APP_CONFIG.authBaseUrl = '$AUTH_BASE_URL';" frontend-react/public/config.js
           grep -q "window.APP_CONFIG.voiceLive" frontend-react/public/config.js
 
-          echo "✓ Frontend configured to use: $API_BASE_URL"
+          echo "✓ Frontend configured to use API: $API_BASE_URL"
+          if [ -n "$AUTH_BASE_URL" ]; then
+            echo "✓ Frontend configured to use auth origin: $AUTH_BASE_URL"
+          else
+            echo "✓ Frontend configured for same-origin auth routes"
+          fi
           cat frontend-react/public/config.js
 
       - name: Setup Node.js
@@ -455,11 +501,50 @@ jobs:
             --name "${{ steps.frontend-storage.outputs.name }}" \
             --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
             --query 'primaryEndpoints.web' -o tsv)
+          PUBLIC_FRONTEND_URL="${{ github.event.inputs.allowedOrigin }}"
+          FRONTEND_SAME_ORIGIN="${{ github.event.inputs.frontendSameOrigin }}"
+          API_BASE_URL_OVERRIDE="${{ github.event.inputs.apiBaseUrlOverride }}"
+          AUTH_BASE_URL_OVERRIDE="${{ github.event.inputs.authBaseUrlOverride }}"
+          EXPECTED_FRONTEND_API_BASE_URL="https://${{ steps.frontend_func_name.outputs.name }}.azurewebsites.net/api"
+          EXPECTED_FRONTEND_AUTH_BASE_URL="https://${{ steps.frontend_func_name.outputs.name }}.azurewebsites.net"
+
+          if [ -n "$PUBLIC_FRONTEND_URL" ]; then
+            FRONTEND_URL="${PUBLIC_FRONTEND_URL%/}/"
+          fi
+
+          if [ "$FRONTEND_SAME_ORIGIN" = "true" ]; then
+            if [ -z "$PUBLIC_FRONTEND_URL" ]; then
+              echo "frontendSameOrigin=true requires allowedOrigin so smoke tests can target the public browser origin" >&2
+              exit 1
+            fi
+
+            FRONTEND_URL="${PUBLIC_FRONTEND_URL%/}/"
+            EXPECTED_FRONTEND_API_BASE_URL="/api"
+            EXPECTED_FRONTEND_AUTH_BASE_URL=""
+          fi
+
+          if [ -n "$API_BASE_URL_OVERRIDE" ]; then
+            EXPECTED_FRONTEND_API_BASE_URL="${API_BASE_URL_OVERRIDE%/}"
+          fi
+
+          if [ -n "$AUTH_BASE_URL_OVERRIDE" ]; then
+            EXPECTED_FRONTEND_AUTH_BASE_URL="${AUTH_BASE_URL_OVERRIDE%/}"
+          elif [ -n "$API_BASE_URL_OVERRIDE" ]; then
+            if [ "$EXPECTED_FRONTEND_API_BASE_URL" = "/api" ]; then
+              EXPECTED_FRONTEND_AUTH_BASE_URL=""
+            elif [[ "$EXPECTED_FRONTEND_API_BASE_URL" == */api ]]; then
+              EXPECTED_FRONTEND_AUTH_BASE_URL="${EXPECTED_FRONTEND_API_BASE_URL%/api}"
+            else
+              EXPECTED_FRONTEND_AUTH_BASE_URL="$EXPECTED_FRONTEND_API_BASE_URL"
+            fi
+          fi
 
           chmod +x ./scripts/staging-smoke.sh
           ./scripts/staging-smoke.sh \
             --api-base-url "https://${{ steps.frontend_func_name.outputs.name }}.azurewebsites.net/api" \
-            --frontend-url "$FRONTEND_URL"
+            --frontend-url "$FRONTEND_URL" \
+            --expected-frontend-api-base-url "$EXPECTED_FRONTEND_API_BASE_URL" \
+            --expected-frontend-auth-base-url "$EXPECTED_FRONTEND_AUTH_BASE_URL"
 
   # ============================================================================
   # Summary
